@@ -36,8 +36,8 @@ export default function ZonesPage() {
 
       {/* Grid of All Monitored Zones */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {zones.map((zone) => (
-          <ZoneCard key={zone.zone_id} zone={zone} />
+        {zones.map((zone, idx) => (
+          <ZoneCard key={zone.zone_id ? `${zone.zone_id}-${idx}` : `zone-${idx}`} zone={zone} />
         ))}
       </div>
     </div>

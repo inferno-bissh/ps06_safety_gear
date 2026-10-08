@@ -51,11 +51,13 @@ export function subscribeZones(
   return onSnapshot(
     zonesCol,
     (snapshot) => {
-      const zones: Zone[] = [];
+      const zonesMap = new Map<string, Zone>();
       snapshot.forEach((docSnap) => {
-        zones.push(docSnap.data() as Zone);
+        const data = docSnap.data() as Zone;
+        const zid = data.zone_id || docSnap.id;
+        zonesMap.set(zid, { ...data, zone_id: zid });
       });
-      onData(zones);
+      onData(Array.from(zonesMap.values()));
     },
     onError
   );
@@ -101,11 +103,13 @@ export function subscribeCameras(
   return onSnapshot(
     camerasCol,
     (snapshot) => {
-      const cameras: Camera[] = [];
+      const camsMap = new Map<string, Camera>();
       snapshot.forEach((docSnap) => {
-        cameras.push(docSnap.data() as Camera);
+        const data = docSnap.data() as Camera;
+        const cid = data.camera_id || docSnap.id;
+        camsMap.set(cid, { ...data, camera_id: cid });
       });
-      onData(cameras);
+      onData(Array.from(camsMap.values()));
     },
     onError
   );

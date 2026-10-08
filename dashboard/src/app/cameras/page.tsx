@@ -146,11 +146,11 @@ export default function CamerasPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {cameras.map((camera) => {
+            {cameras.map((camera, idx) => {
               const zone = zones.find((z) => z.zone_id === camera.zone_id);
               return (
                 <CameraViewer
-                  key={camera.camera_id}
+                  key={camera.camera_id ? `${camera.camera_id}-${idx}` : `cam-${idx}`}
                   camera={camera}
                   workers={workerTracks}
                   zoneName={zone?.name || camera.zone_id}

@@ -1,3 +1,4 @@
+import os
 import cv2
 import threading
 import time
@@ -55,8 +56,13 @@ class ThreadedCameraStream:
         self.is_running: bool = False
         self.is_synthetic_mode: bool = False
         
-        # Connect to stream
-        self.cap = cv2.VideoCapture(self.src)
+        # Connect to stream (use DirectShow backend on Windows for physical webcams to prevent MSMF locking)
+        if isinstance(self.src, int) and os.name == "nt":
+            self.cap = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(self.src)
+        else:
+            self.cap = cv2.VideoCapture(self.src)
         
         if not self.cap.isOpened():
             print(f"[Stream Warning] Unable to open physical stream '{self.src}'. Running synthetic generator for {camera_id}.")

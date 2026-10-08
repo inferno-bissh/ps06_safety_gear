@@ -33,11 +33,20 @@ export default function FacilityDashboardPage() {
 
   const netBadge = getNetworkBadge(facility.current_network_mode);
 
-  // Sort zones so highest priority appears first
-  const sortedZones = [...zones].sort((a, b) => {
+  // Deduplicate and sort zones so highest priority appears first
+  const sortedZones = React.useMemo(() => {
+    const uniqueMap = new Map<string, (typeof zones)[0]>();
+    zones.forEach((zone, idx) => {
+      const id = zone.zone_id || `zone-${idx}`;
+      if (!uniqueMap.has(id)) {
+        uniqueMap.set(id, { ...zone, zone_id: id });
+      }
+    });
     const order: Record<string, number> = { P3: 4, P2: 3, P1: 2, P0: 1 };
-    return order[b.current_priority] - order[a.current_priority];
-  });
+    return Array.from(uniqueMap.values()).sort(
+      (a, b) => (order[b.current_priority] || 0) - (order[a.current_priority] || 0)
+    );
+  }, [zones]);
 
   return (
     <div className="space-y-5 font-mono">
@@ -204,8 +213,8 @@ export default function FacilityDashboardPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {sortedZones.map((zone) => (
-              <ZoneCard key={zone.zone_id} zone={zone} />
+            {sortedZones.map((zone, idx) => (
+              <ZoneCard key={zone.zone_id ? `${zone.zone_id}-${idx}` : `zone-${idx}`} zone={zone} />
             ))}
           </div>
         </div>
@@ -236,9 +245,9 @@ export default function FacilityDashboardPage() {
                 </p>
               </div>
             ) : (
-              incidents.slice(0, 5).map((incident) => (
+              incidents.slice(0, 5).map((incident, idx) => (
                 <div
-                  key={incident.incident_id}
+                  key={incident.incident_id ? `${incident.incident_id}-${idx}` : `inc-${idx}`}
                   onClick={() => selectIncident(incident)}
                   className="bg-[#1A222C] border border-[#26303C] hover:border-slate-600 rounded p-2.5 space-y-1.5 cursor-pointer transition-colors group"
                 >
@@ -294,11 +303,11 @@ export default function FacilityDashboardPage() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
-          {systemHealth.slice(0, 6).map((item) => {
+          {systemHealth.slice(0, 6).map((item, idx) => {
             const status = getStatusStyle(item.status);
             return (
               <div
-                key={item.id}
+                key={item.id ? `${item.id}-${idx}` : `health-${idx}`}
                 className="bg-[#1A222C] p-2 rounded border border-slate-800/80 flex flex-col justify-between"
               >
                 <span className="text-slate-400 text-[10px] truncate" title={item.name}>
