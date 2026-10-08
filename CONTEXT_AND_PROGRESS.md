@@ -215,13 +215,28 @@
 - **Files Modified:**
   - Modified: [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/app/zones/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/zones/page.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx), [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 13)
+- **Agent Focus:** Runtime TypeError (`Cannot read properties of undefined (reading 'toFixed')`) in `ZoneCard.tsx` and Comprehensive Null Safety Audit.
+- **Key Decisions & Accomplishments:**
+  - **Resolved Runtime TypeError at `ZoneCard.tsx:97`:**
+    - Root cause: If Firestore documents or live updates provided a zone where `sensor_smoke_index` was undefined, invoking `(zone.sensor_smoke_index).toFixed(2)` crashed with `TypeError: Cannot read properties of undefined (reading 'toFixed')`.
+    - Implemented nullish coalescing: `(zone.sensor_smoke_index ?? 0).toFixed(2)` and `zone.sensor_smoke_raw ?? 0` in [`dashboard/src/components/ZoneCard.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ZoneCard.tsx).
+    - Added optional chaining guards across all policy properties: `zone.ppe_policy?.helmet_required`, `vest_required`, `gloves_required`, `safety_shoes_required`.
+  - **Comprehensive Audit across Dashboard Components:**
+    - Patched `(zone.sensor_smoke_index ?? 0).toFixed(2)` in [`dashboard/src/app/zones/[zoneId]/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/zones/%5BzoneId%5D/page.tsx).
+    - Patched `((worker.confidence ?? 0.88) * 100).toFixed(0)` and `((w.confidence ?? 0.88) * 100).toFixed(0)` in [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx).
+  - **Verification:** Tested `http://localhost:3000/` (200 OK), `http://localhost:3000/zones` (200 OK), and `npx tsc --noEmit` (0 errors) (`[GIT COMMIT] c6c7be2f`).
+- **Files Modified:**
+  - Modified: [`dashboard/src/components/ZoneCard.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ZoneCard.tsx), [`dashboard/src/app/zones/[zoneId]/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/zones/%5BzoneId%5D/page.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Stop Zombie Python Processes:** In PowerShell, run `Stop-Process -Name python -Force` to cleanly release webcam hardware from background terminal sessions.
+1. **Verify Dashboard Operation:** Refresh `http://localhost:3000/` and confirm all zone cards render with zero runtime exceptions.
 2. **Launch Orchestrator:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
-3. **Verify Dashboard:** Refresh `http://localhost:3000/` and confirm zero console warnings and live camera video rendering.
+3. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated/live ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
+
 
 
 
