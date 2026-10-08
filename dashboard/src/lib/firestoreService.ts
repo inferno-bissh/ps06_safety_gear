@@ -182,11 +182,15 @@ export async function acknowledgeIncidentInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const incidentRef = doc(db, "facilities", facilityId, "incidents", incidentId);
-  await updateDoc(incidentRef, {
-    status: "ACKNOWLEDGED",
-    acknowledged_at: new Date().toISOString(),
-    acknowledged_by: supervisorUid,
-  });
+  await setDoc(
+    incidentRef,
+    {
+      status: "ACKNOWLEDGED",
+      acknowledged_at: new Date().toISOString(),
+      acknowledged_by: supervisorUid,
+    },
+    { merge: true }
+  );
 }
 
 /**
@@ -200,12 +204,16 @@ export async function resolveIncidentInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const incidentRef = doc(db, "facilities", facilityId, "incidents", incidentId);
-  await updateDoc(incidentRef, {
-    status: "RESOLVED",
-    resolved_at: new Date().toISOString(),
-    resolved_by: supervisorUid,
-    resolution_note: note || "Resolved after on-site review",
-  });
+  await setDoc(
+    incidentRef,
+    {
+      status: "RESOLVED",
+      resolved_at: new Date().toISOString(),
+      resolved_by: supervisorUid,
+      resolution_note: note || "Resolved after on-site review",
+    },
+    { merge: true }
+  );
 }
 
 /**
@@ -218,13 +226,20 @@ export async function updateZonePPEPolicyInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const zoneRef = doc(db, "facilities", facilityId, "zones", zoneId);
-  await updateDoc(zoneRef, {
-    "ppe_policy.helmet_required": policy.helmet_required,
-    "ppe_policy.vest_required": policy.vest_required,
-    "ppe_policy.gloves_required": policy.gloves_required,
-    "ppe_policy.safety_shoes_required": policy.safety_shoes_required,
-    "ppe_policy.updated_at": new Date().toISOString(),
-  });
+  await setDoc(
+    zoneRef,
+    {
+      zone_id: zoneId,
+      ppe_policy: {
+        helmet_required: policy.helmet_required,
+        vest_required: policy.vest_required,
+        gloves_required: policy.gloves_required,
+        safety_shoes_required: policy.safety_shoes_required,
+        updated_at: new Date().toISOString(),
+      },
+    },
+    { merge: true }
+  );
 }
 
 /**
@@ -236,10 +251,14 @@ export async function setNetworkModeInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const facilityRef = doc(db, "facilities", facilityId);
-  await updateDoc(facilityRef, {
-    current_network_mode: mode,
-    emergency_response_available: mode !== "OFFLINE",
-  });
+  await setDoc(
+    facilityRef,
+    {
+      current_network_mode: mode,
+      emergency_response_available: mode !== "OFFLINE",
+    },
+    { merge: true }
+  );
 }
 
 /**
@@ -251,11 +270,12 @@ export async function createIncidentInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const incidentRef = doc(db, "facilities", facilityId, "incidents", incident.incident_id);
-  await setDoc(incidentRef, incident);
+  await setDoc(incidentRef, incident, { merge: true });
 }
 
 /**
- * Update Camera metadata (such as custom name) in Firestore
+ * Update Camera metadata (such as custom name, stream URL) in Firestore
+ * Uses setDoc with merge: true to safely create if the document does not exist yet.
  */
 export async function updateCameraInFirestore(
   facilityId: string,
@@ -264,10 +284,15 @@ export async function updateCameraInFirestore(
 ): Promise<void> {
   if (!db) throw new Error("Firestore not initialized");
   const camRef = doc(db, "facilities", facilityId, "cameras", cameraId);
-  await updateDoc(camRef, {
-    ...updates,
-    last_seen: new Date().toISOString(),
-  });
+  await setDoc(
+    camRef,
+    {
+      camera_id: cameraId,
+      ...updates,
+      last_seen: new Date().toISOString(),
+    },
+    { merge: true }
+  );
 }
 
 /**

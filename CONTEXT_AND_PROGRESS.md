@@ -330,12 +330,27 @@
   - Created: [`dashboard/src/app/api/cameras/workers/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/workers/route.ts)
   - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/ppe_detector.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 19)
+- **Agent Focus:** Resolution of FirebaseError (`No document to update: .../cameras/CCTV_01`) via Safe Upsert (`setDoc` with `merge: true`).
+- **Key Decisions & Accomplishments:**
+  - **Root Cause Analysis:**
+    - In [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), `updateCameraInFirestore` previously called `updateDoc(camRef, updates)`.
+    - `updateDoc` requires the target document to exist beforehand in Cloud Firestore. If the document has not yet been seeded or was created under an alternative ID, Firebase throws `FirebaseError: No document to update: .../cameras/CCTV_01`.
+  - **Implemented Safe Upsert Mechanism:**
+    - Switched `updateCameraInFirestore` to `setDoc(camRef, { camera_id: cameraId, ...updates, last_seen: ... }, { merge: true })`.
+    - Also fortified `updateZonePPEPolicyInFirestore`, `setNetworkModeInFirestore`, `acknowledgeIncidentInFirestore`, and `resolveIncidentInFirestore` with `setDoc(..., { merge: true })` to guarantee that all updates safely create the document if missing without throwing exceptions.
+  - **Verification:**
+    - `npx tsc --noEmit` -> 0 errors.
+    - Verified Next.js dashboard routes return 200 OK.
+- **Files Modified:**
+  - Modified: [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Verify Live Dashboard:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras). Watch the camera feeds show real-time tactical bounding boxes with `HELMET: PASS/FAIL` and `VEST: PASS/FAIL` badges, and observe the "Active Workers Tracked" panel displaying live worker chips.
-2. **Demonstrate Violation Alert:** If a person remains in front of the production bay camera (CCTV 2) without required safety gear, watch the counter increment to 15 frames, trigger cross-angle identity resolution, and publish a P1 Incident to Cloud Firestore.
+1. **Verify Camera Updates:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras). Click the pencil icon to rename `CCTV 1` or click `(+) Connect IP Camera` to save a custom IP URL. Confirm the change saves cleanly without any console `FirebaseError`.
+2. **Demonstrate End-to-End Safety Workflow:** Observe live dual-stream video ingestion, real-time PPE chip detection, and incident reporting to Firestore.
 
 
 
