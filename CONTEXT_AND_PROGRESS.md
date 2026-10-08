@@ -229,13 +229,30 @@
 - **Files Modified:**
   - Modified: [`dashboard/src/components/ZoneCard.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ZoneCard.tsx), [`dashboard/src/app/zones/[zoneId]/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/zones/%5BzoneId%5D/page.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 14)
+- **Agent Focus:** Remote Phone Camera Timeout (`Error number -138 occurred`) Resolution, Auto-Reconnect Loop, and Network Diagnostics.
+- **Key Decisions & Accomplishments:**
+  - **Network & Stream Diagnostics:**
+    - Ran diagnostic `Test-NetConnection` from laptop (`192.168.1.19`) to phone (`192.168.1.5:8080`) ➔ `TcpTestSucceeded: True`.
+    - Tested `http://192.168.1.5:8080/video` via Python urllib and OpenCV ➔ `200 multipart/x-mixed-replace`, successfully reading full-resolution frames (`1080x1920x3`).
+  - **Root Cause of Error -138 (ETIMEDOUT):**
+    - In OpenCV FFmpeg (`libavformat`), `-138` indicates `AVERROR(ETIMEDOUT)`. This occurs when the script starts before the phone's IP Webcam server finishes binding port 8080, or if Android aggressive battery optimization / lock-screen puts the Wi-Fi interface to sleep.
+    - Previously, `ThreadedCameraStream` failed once and stayed in synthetic mode or threw without retrying.
+  - **Implemented Persistent Auto-Reconnect Engine:**
+    - Upgraded [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py): added non-blocking periodic reconnection retry loop in `_capture_worker` (attempts reconnection every 3.0 seconds if physical stream drops or was unreachable at startup).
+    - Prevents script crashes and seamlessly restores live video the moment the phone is reachable.
+  - Verified test mode (40 synthetic frames) and clean build (`[GIT COMMIT] 33f988bc`).
+- **Files Modified:**
+  - Modified: [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Verify Dashboard Operation:** Refresh `http://localhost:3000/` and confirm all zone cards render with zero runtime exceptions.
+1. **Keep Phone Screen Awake:** In the Android **IP Webcam** app settings, ensure **"Prevent from sleeping" / "Keep screen on"** is active so Android does not sleep the camera hardware.
 2. **Launch Orchestrator:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
-3. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated/live ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
+3. **Verify Dashboard:** Open `http://localhost:3000/` and confirm live footage streams from both CCTV 1 and CCTV 2.
+
 
 
 
