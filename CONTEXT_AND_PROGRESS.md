@@ -200,13 +200,29 @@
 - **Files Modified:**
   - Modified: [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 12)
+- **Agent Focus:** React Unique Key Warning Resolution in `FacilityDashboardPage` and OpenCV Windows DirectShow (`CAP_DSHOW`) Driver Hardening.
+- **Key Decisions & Accomplishments:**
+  - **Resolved Console Error ("Each child in a list should have a unique 'key' prop" in `src/app/page.tsx:208`):**
+    - Root cause: If Firestore collections or seed data returned duplicate `zone_id` values (e.g. `WELDING_ZONE`), React threw a duplicate key error when rendering `<ZoneCard key={zone.zone_id} />`.
+    - Implemented `uniqueMap` deduplication inside `useMemo` in [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx) to ensure each zone is rendered exactly once.
+    - Added index-safe unique key props (`key={zone.zone_id ? `${zone.zone_id}-${idx}` : `zone-${idx}`}`) across `page.tsx`, `zones/page.tsx`, and `cameras/page.tsx`.
+    - Added ID deduplication via `Map<string, Zone>` and `Map<string, Camera>` in [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts) (`subscribeZones` and `subscribeCameras`).
+  - **Resolved Windows OpenCV MSMF Camera Lock (`Error: -1072875772`):**
+    - Root cause: Running multiple concurrent Python instances or using default Windows Media Foundation (MSMF) caused device exclusive-locking errors on physical webcam `0`.
+    - Added `cv2.CAP_DSHOW` (DirectShow) backend initialization in [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py) for integer camera sources on Windows (`os.name == 'nt'`), preventing MSMF hangs and locking issues.
+  - Verified test mode (40 synthetic frames) and clean TypeScript build (`npx tsc --noEmit` -> 0 errors) (`[GIT COMMIT] adaa0602`).
+- **Files Modified:**
+  - Modified: [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/app/zones/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/zones/page.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx), [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Verify Live Feeds on Main Dashboard:** Open `http://localhost:3000/` and confirm both CCTV 1 and CCTV 2 video feeds are streaming live directly on the operations console.
-2. **Close Redundant Python Terminal:** If duplicate orchestrator instances are open in the terminal, terminate the older instance so that only one process owns the webcam and port 5000.
-3. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated/live ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
+1. **Stop Zombie Python Processes:** In PowerShell, run `Stop-Process -Name python -Force` to cleanly release webcam hardware from background terminal sessions.
+2. **Launch Orchestrator:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
+3. **Verify Dashboard:** Refresh `http://localhost:3000/` and confirm zero console warnings and live camera video rendering.
+
 
 
 
