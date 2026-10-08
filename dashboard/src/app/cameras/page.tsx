@@ -16,11 +16,15 @@ import {
   Building2,
   Workflow,
   CheckCircle2,
+  Plus,
 } from "lucide-react";
+import { ConnectCameraModal } from "@/components/ConnectCameraModal";
 
 export default function CamerasPage() {
   const { cameras, zones, workerTracks, gateLogs } = useSafety();
   const [filterGatePpe, setFilterGatePpe] = useState<"ALL" | "COMPLIANT" | "NON_COMPLIANT">("ALL");
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [modalCameraId, setModalCameraId] = useState<string>("CCTV_02");
 
   const filteredLogs = gateLogs.filter((log) => {
     if (filterGatePpe === "ALL") return true;
@@ -47,13 +51,23 @@ export default function CamerasPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => {
+              setModalCameraId("CCTV_02");
+              setIsConnectModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all border border-blue-400/40"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>Connect IP Camera</span>
+          </button>
+          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded text-xs">
             <Cpu className="w-4 h-4 text-emerald-400" />
             <span className="text-slate-400">Inference:</span>
             <span className="font-bold text-emerald-400">YOLOv8 + ByteTrack (CPU Optimized)</span>
           </div>
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded">
+          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded text-xs">
             <UserCheck className="w-4 h-4 text-cyan-400" />
             <span className="text-slate-400">Biometrics:</span>
             <span className="font-bold text-cyan-400">YuNet + SFace (128-D)</span>
@@ -135,14 +149,26 @@ export default function CamerasPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Columns: Video Feeds */}
         <div className="lg:col-span-2 space-y-5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
               <Video className="w-4 h-4 text-emerald-400" />
               Active Video Feeds ({cameras.length})
             </h3>
-            <span className="text-[11px] text-slate-400">
-              Low-Latency MJPEG &amp; RTSP Ingestion
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setModalCameraId(cameras.length >= 2 ? "CCTV_03" : "CCTV_02");
+                  setIsConnectModalOpen(true);
+                }}
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[11px] font-bold border border-blue-500/40 transition-colors"
+              >
+                <Plus className="w-3 h-3 stroke-[2.5]" />
+                <span>Add / Connect Feed</span>
+              </button>
+              <span className="text-[11px] text-slate-400">
+                Low-Latency MJPEG &amp; RTSP Ingestion
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -156,9 +182,35 @@ export default function CamerasPage() {
                   zoneName={zone?.name || camera.zone_id}
                   hasFireHazard={zone?.fire_detected}
                   hasSmokeHazard={zone?.smoke_detected}
+                  onConnectIp={(cam) => {
+                    setModalCameraId(cam.camera_id);
+                    setIsConnectModalOpen(true);
+                  }}
                 />
               );
             })}
+
+            {/* Quick Connect Dashed Card for Additional Cameras */}
+            {cameras.length < 4 && (
+              <div
+                onClick={() => {
+                  const nextSlot = cameras.length === 2 ? "CCTV_03" : "CCTV_04";
+                  setModalCameraId(nextSlot);
+                  setIsConnectModalOpen(true);
+                }}
+                className="rounded-lg border-2 border-dashed border-slate-700/80 hover:border-blue-500/60 bg-[#0E131A]/60 hover:bg-blue-500/5 transition-all p-6 flex flex-col items-center justify-center text-center cursor-pointer min-h-[240px] group"
+              >
+                <div className="w-12 h-12 rounded-full bg-blue-500/10 group-hover:bg-blue-500/20 border border-blue-500/30 flex items-center justify-center text-blue-400 mb-3 transition-colors">
+                  <Plus className="w-6 h-6 stroke-[2.5]" />
+                </div>
+                <span className="text-xs font-bold text-slate-200 group-hover:text-blue-300 uppercase tracking-wide">
+                  Connect Additional IP Camera
+                </span>
+                <p className="text-[11px] text-slate-400 max-w-[220px] mt-1">
+                  Tap here to link phone IP Webcam (Side View Left / Right) via Wi-Fi network.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -290,6 +342,13 @@ export default function CamerasPage() {
           </div>
         </div>
       </div>
+
+      {/* Connect IP Camera Modal */}
+      <ConnectCameraModal
+        isOpen={isConnectModalOpen}
+        onClose={() => setIsConnectModalOpen(false)}
+        initialCameraId={modalCameraId}
+      />
     </div>
   );
 }

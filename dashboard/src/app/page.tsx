@@ -17,11 +17,15 @@ import {
   CheckCircle,
   Eye,
   ExternalLink,
+  Plus,
 } from "lucide-react";
 import Link from "next/link";
+import { ConnectCameraModal } from "@/components/ConnectCameraModal";
 
 export default function FacilityDashboardPage() {
   const { facility, zones, cameras, workerTracks, incidents, systemHealth, selectIncident, acknowledgeIncident } = useSafety();
+  const [isConnectModalOpen, setIsConnectModalOpen] = React.useState(false);
+  const [modalCameraId, setModalCameraId] = React.useState<string>("CCTV_02");
 
   const cctv1 = cameras.find((c) => c.camera_id === "CCTV_01") || cameras[0];
   const cctv2 = cameras.find((c) => c.camera_id === "CCTV_02") || cameras[1] || cameras[0];
@@ -159,7 +163,7 @@ export default function FacilityDashboardPage() {
 
       {/* Live CCTV Video Wall (CCTV 1 & CCTV 2) */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
             <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide flex items-center gap-2">
@@ -167,13 +171,26 @@ export default function FacilityDashboardPage() {
               <span>Live CCTV Operations Wall (Real-Time AI Streams · Port 5000)</span>
             </h2>
           </div>
-          <Link
-            href="/cameras"
-            className="text-xs text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1"
-          >
-            <span>Full Multi-Angle View & Gate Audit Register</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setModalCameraId("CCTV_02");
+                setIsConnectModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all border border-blue-400/40"
+              title="Connect Phone / IP Camera Stream (+)"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              <span>Connect IP Camera</span>
+            </button>
+            <Link
+              href="/cameras"
+              className="text-xs text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1"
+            >
+              <span>Full Multi-Angle View</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -182,6 +199,10 @@ export default function FacilityDashboardPage() {
               camera={cctv1}
               workers={workerTracks}
               zoneName="Facility Gate Choke-Point"
+              onConnectIp={(cam) => {
+                setModalCameraId(cam.camera_id);
+                setIsConnectModalOpen(true);
+              }}
             />
           )}
           {cctv2 && (
@@ -189,6 +210,10 @@ export default function FacilityDashboardPage() {
               camera={cctv2}
               workers={workerTracks}
               zoneName="Production Bay (Front View)"
+              onConnectIp={(cam) => {
+                setModalCameraId(cam.camera_id);
+                setIsConnectModalOpen(true);
+              }}
             />
           )}
         </div>
@@ -322,6 +347,13 @@ export default function FacilityDashboardPage() {
           })}
         </div>
       </div>
+
+      {/* Connect IP Camera Modal */}
+      <ConnectCameraModal
+        isOpen={isConnectModalOpen}
+        onClose={() => setIsConnectModalOpen(false)}
+        initialCameraId={modalCameraId}
+      />
     </div>
   );
 }

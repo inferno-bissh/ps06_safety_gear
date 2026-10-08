@@ -55,6 +55,7 @@ interface SafetyContextType {
   setNetworkMode: (mode: NetworkMode) => void;
   updatePPEPolicy: (zoneId: string, policy: Partial<ZonePPEPolicy>) => void;
   updateCameraName: (cameraId: string, newName: string) => Promise<void>;
+  updateCameraConfig: (cameraId: string, updates: Partial<Camera>) => Promise<void>;
 }
 
 const initialFacility: FacilityState = {
@@ -835,6 +836,20 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const updateCameraConfig = async (cameraId: string, updates: Partial<Camera>) => {
+    setCameras((prev) =>
+      prev.map((c) => (c.camera_id === cameraId ? { ...c, ...updates } : c))
+    );
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await updateCameraInFirestore(facility.facility_id, cameraId, updates);
+      } catch (e) {
+        console.error("Failed to update camera config in Firestore:", e);
+      }
+    }
+  };
+
   return (
     <SafetyContext.Provider
       value={{
@@ -862,6 +877,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setNetworkMode,
         updatePPEPolicy,
         updateCameraName,
+        updateCameraConfig,
       }}
     >
       {children}
