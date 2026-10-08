@@ -10,8 +10,8 @@ import {
   SystemHealthItem,
   NetworkMode,
   ZonePPEPolicy,
-} from "@/types/safety";
-import { isFirebaseConfigured } from "@/lib/firebase";
+} from "../types/safety";
+import { isFirebaseConfigured } from "../lib/firebase";
 import {
   subscribeFacility,
   subscribeZones,
@@ -27,7 +27,7 @@ import {
   setNetworkModeInFirestore,
   createIncidentInFirestore,
   seedDefaultFirestoreData,
-} from "@/lib/firestoreService";
+} from "../lib/firestoreService";
 
 interface SafetyContextType {
   facility: FacilityState;
