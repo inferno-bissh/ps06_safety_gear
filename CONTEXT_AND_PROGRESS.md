@@ -245,13 +245,37 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/stream_manager.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 15)
+- **Agent Focus:** Plus Sign `(+)` Dashboard Connect Camera Option for Automatic IP Camera Pairing & Network Stream Ingestion.
+- **Key Decisions & Accomplishments:**
+  - **Live Probe API Endpoint (`/api/cameras/test-ip`):**
+    - Created [`dashboard/src/app/api/cameras/test-ip/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/test-ip/route.ts): Server-side network health probe testing IP camera reachability, response latency in milliseconds, and validating whether the camera is serving active MJPEG streams or video endpoints.
+    - Added automatic format normalization: typing bare IPs like `192.168.1.5` or `192.168.1.5:8080` automatically expands to `http://192.168.1.5:8080/video`.
+  - **Interactive Connect Camera Modal (`ConnectCameraModal.tsx`):**
+    - Created [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ConnectCameraModal.tsx):
+      - Slot selection pills for CCTV 1 (Gate), CCTV 2 (Front View - Phone), CCTV 3 (Side Left), CCTV 4 (Side Right).
+      - Quick Fill preset for common mobile IP Webcam addresses (`192.168.1.5`).
+      - Real-time "Test Connection" button providing live latency feedback (tested 14ms - 88ms) and status indicators.
+      - Dynamic orchestrator CLI command generator with one-click copy button.
+      - Save & Connect integration with Firestore and local React context.
+  - **Prominent `(+)` Triggers Across Dashboard:**
+    - Main Dashboard ([`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx)): Added blue `(+) Connect IP Camera` button in the Live CCTV Operations Wall header.
+    - Surveillance Page ([`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx)): Added top toolbar `(+) Connect IP Camera` button, `(+) Add / Connect Feed` button, and an interactive dashed `Connect Additional IP Camera` card in the camera grid.
+    - Camera Feeds ([`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx)): Added `(+) IP` quick-connect buttons in individual camera headers and standby / stream error recovery screens.
+  - **Verification:**
+    - Verified `npx tsc --noEmit` passes with 0 errors.
+    - Tested `/api/cameras/test-ip` with `192.168.1.5:8080` and `192.168.1.5` (returns HTTP 200, 14-88ms latency, auto-formatted `http://192.168.1.5:8080/video`).
+- **Files Created/Modified:**
+  - Created: [`dashboard/src/app/api/cameras/test-ip/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/test-ip/route.ts), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ConnectCameraModal.tsx)
+  - Modified: [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Keep Phone Screen Awake:** In the Android **IP Webcam** app settings, ensure **"Prevent from sleeping" / "Keep screen on"** is active so Android does not sleep the camera hardware.
-2. **Launch Orchestrator:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
-3. **Verify Dashboard:** Open `http://localhost:3000/` and confirm live footage streams from both CCTV 1 and CCTV 2.
+1. **Test in Browser:** Open `http://localhost:3000/` or `http://localhost:3000/cameras`, click the `(+) Connect IP Camera` button, type or verify the IP `192.168.1.5`, click "Test Link" to see the live green badge, and click "Connect & Save Camera".
+2. **Launch Orchestrator with Phone Stream:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
+3. **Verify Multi-Camera Footage:** Confirm both CCTV 1 (Laptop Gate Cam) and CCTV 2 (Phone Production Bay Cam) are rendering live annotated video simultaneously on the dashboard.
 
 
 
