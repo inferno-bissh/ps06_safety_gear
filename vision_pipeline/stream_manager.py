@@ -81,33 +81,65 @@ class ThreadedCameraStream:
         self.thread.start()
 
     def _capture_worker(self):
-        """Continuously grabs frames, replacing the single latest frame buffer."""
+        """Continuously grabs frames, replacing the single latest frame buffer with auto-reconnect."""
         step = 0
+        last_reconnect_attempt = time.time()
+
         while self.is_running:
             step += 1
-            if not self.is_synthetic_mode:
+            now = time.time()
+
+            # If stream is offline/synthetic, periodically attempt reconnection
+            if self.is_synthetic_mode:
+                if isinstance(self.src, str) and (now - last_reconnect_attempt > 3.0):
+                    last_reconnect_attempt = now
+                    try:
+                        test_cap = cv2.VideoCapture(self.src)
+                        if test_cap.isOpened():
+                            ret_test, frame_test = test_cap.read()
+                            if ret_test and frame_test is not None:
+                                self.cap = test_cap
+                                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                                self.is_synthetic_mode = False
+                                print(f"[Stream Restored] Successfully connected camera stream for {self.camera_id} via '{self.src}'.")
+                                with self.lock:
+                                    self.latest_frame = frame_test
+                                    self.latest_timestamp = now
+                                    self.frame_count += 1
+                                continue
+                            else:
+                                test_cap.release()
+                    except Exception:
+                        pass
+
+                synth = generate_synthetic_industrial_frame(1280, 720, step, self.camera_id)
+                with self.lock:
+                    self.latest_frame = synth
+                    self.latest_timestamp = now
+                    self.frame_count += 1
+                time.sleep(1.0 / self.target_fps)
+                continue
+
+            # In physical capture mode: read frame
+            try:
                 ret, frame = self.cap.read()
-                now = time.time()
                 if ret and frame is not None:
                     with self.lock:
                         self.latest_frame = frame
                         self.latest_timestamp = now
                         self.frame_count += 1
                 else:
-                    # Stream dropped or ended; fallback to synthetic
-                    with self.lock:
-                        self.latest_frame = generate_synthetic_industrial_frame(1280, 720, step, self.camera_id)
-                        self.latest_timestamp = time.time()
-                        self.frame_count += 1
-                    time.sleep(1.0 / self.target_fps)
-            else:
-                synth = generate_synthetic_industrial_frame(1280, 720, step, self.camera_id)
-                now = time.time()
-                with self.lock:
-                    self.latest_frame = synth
-                    self.latest_timestamp = now
-                    self.frame_count += 1
-                time.sleep(1.0 / self.target_fps)
+                    # Stream dropped or Wi-Fi timed out
+                    print(f"[Stream Notice] Signal lost from {self.camera_id} ({self.src}). Switching to auto-reconnect standby...")
+                    self.is_synthetic_mode = True
+                    last_reconnect_attempt = now
+                    try:
+                        self.cap.release()
+                    except Exception:
+                        pass
+            except Exception as e:
+                self.is_synthetic_mode = True
+                last_reconnect_attempt = now
 
     def get_latest_frame(self) -> Tuple[Optional[np.ndarray], float]:
         """Returns the most recent frame and capture timestamp without blocking."""
