@@ -190,15 +190,23 @@
   - Created: [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py), [`tsconfig.json`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/tsconfig.json)
   - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 11)
+- **Agent Focus:** Embedding Live CCTV Video Wall directly on the Main Dashboard Homepage (`/`) and Overriding Legacy Unsplash Placeholders.
+- **Key Decisions & Accomplishments:**
+  - **Embedded Live Tactical Video Wall on Dashboard Homepage (`/`):** Upgraded [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx) to embed the **Live CCTV Operations Wall** immediately underneath the top KPI status cards. Both CCTV 1 (Gate Choke-point) and CCTV 2 (Production Bay Front View) now render directly on the homepage with live AI annotations.
+  - **Overriding Legacy Unsplash Placeholders:** In [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), ensured that any `stream_url` from earlier Firestore seeds containing `unsplash.com` automatically defaults to the live Python MJPEG stream endpoint (`http://localhost:5000/video/cctv1` or `cctv2`).
+  - **Live Stream Verification:** Tested `http://localhost:5000/health`, `/video/cctv1`, and `/video/cctv2` via HTTP client tests, confirming `200 multipart/x-mixed-replace` streams are active. Tested both `http://localhost:3000/` and `http://localhost:3000/cameras`, confirming `200 OK` responses.
+  - Verified clean TypeScript build (`npx tsc --noEmit` -> 0 errors) (`[GIT COMMIT] b636e98d`).
+- **Files Modified:**
+  - Modified: [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Start Multi-CCTV Vision Orchestrator:** Run the updated orchestrator to start broadcasting live MJPEG streams:
-   ```bash
-   python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://<PHONE_IP>:8080/video"
-   ```
-2. **Verify Browser Live Streams:** Refresh `http://localhost:3000/cameras` on the laptop and `http://<LAPTOP_IP>:3000/cameras` on the smartphone; verify live AI video streams render with sub-50ms latency.
+1. **Verify Live Feeds on Main Dashboard:** Open `http://localhost:3000/` and confirm both CCTV 1 and CCTV 2 video feeds are streaming live directly on the operations console.
+2. **Close Redundant Python Terminal:** If duplicate orchestrator instances are open in the terminal, terminate the older instance so that only one process owns the webcam and port 5000.
 3. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated/live ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
+
 
 
