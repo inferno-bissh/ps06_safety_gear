@@ -146,13 +146,29 @@
   - Created: `verficationPlans/README.md`, `verficationPlans/PHASE_1_STREAM_INGESTION.md`, `verficationPlans/PHASE_2_FACE_RECOGNITION.md`, `verficationPlans/PHASE_3_MULTICAM_ORCHESTRATOR.md`, `verficationPlans/PHASE_4_DASHBOARD_INTEGRATION.md`, `scripts/git_tool.py`, `.gitignore`, `vision_pipeline/stream_manager.py`, `vision_pipeline/face_engine.py`, `vision_pipeline/enroll_workers.py`, `vision_pipeline/multicam_orchestrator.py`, `vision_pipeline/tests/test_stream_ingestion.py`, `vision_pipeline/tests/test_face_engine.py`, `vision_pipeline/tests/test_multicam_orchestrator.py`
   - Modified: `vision_pipeline/firestore_client.py`, `dashboard/src/lib/firestoreService.ts`, `dashboard/src/context/SafetyContext.tsx`, `dashboard/src/app/cameras/page.tsx`, `CONTEXT_AND_PROGRESS.md`
 
+### Session: 2026-10-09 (Session 09)
+- **Agent Focus:** CCTV 1–4 Nomenclature Standardization & Dynamic Admin Camera Renaming with Cloud Firestore Sync.
+- **Key Decisions & Accomplishments:**
+  - Standardized camera architecture to 4 dedicated CCTV feeds matching physical site planning:
+    - **CCTV 1 (`CCTV_01`):** `CCTV 1 — Facility Gate Choke-Point (Laptop Camera)` [Gate Entry Choke-Point]
+    - **CCTV 2 (`CCTV_02`):** `CCTV 2 — Production Bay (Front Overhead View)` [Front View (Primary Tracking)]
+    - **CCTV 3 (`CCTV_03`):** `CCTV 3 — Production Bay (Left Side Angle View)` [Left Side View (Cross-Angle Angle)]
+    - **CCTV 4 (`CCTV_04`):** `CCTV 4 — Production Bay (Right Side Angle View)` [Right Side View (Cross-Angle Angle)]
+  - Implemented dynamic **Admin Camera Renaming**:
+    - Added [`updateCameraInFirestore`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts) to update `facilities/STPI_HOST_01/cameras/{id}` in real time.
+    - Updated [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx) exposing `updateCameraName(cameraId, newName)`.
+    - Upgraded [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx) with inline pencil edit button, enabling admins to rename any camera on-the-fly with Enter/Escape keyboard shortcuts and Firestore persistence.
+  - Upgraded [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py) CLI parser to support `--cctv1-gate`, `--cctv2-front`, `--cctv3-side-left`, and `--cctv4-side-right`.
+  - Upgraded [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx) to render a responsive 2-column grid accommodating all 4 CCTV cameras.
+  - Verified tests and clean TypeScript compilation (`npx tsc --noEmit` -> 0 errors) (`[GIT COMMIT] aa7958e2`).
+- **Files Modified:**
+  - Modified: [`dashboard/src/types/safety.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/types/safety.ts), [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Live Demonstration Walkthrough:**
-   * Step 1: Enroll team members using `python vision_pipeline/enroll_workers.py --enroll "<Member Name>"`.
-   * Step 2: Launch dual-camera orchestrator using smartphone camera feeds (e.g. `python vision_pipeline/multicam_orchestrator.py --gate-source "http://<phone1_ip>:8080/video" --ward-source "http://<phone2_ip>:8080/video"` or `0` for local webcam).
-   * Step 3: View real-time Gate Audit Logs and live video streams at `http://localhost:3000/cameras`.
-2. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
+1. **Verify Camera Renaming:** Open `http://localhost:3000/cameras`, click the pencil icon on any camera card, edit its name, and confirm it saves across the system and Firestore.
+2. **Multi-Camera Deployment:** Connect secondary/tertiary phone IP streams via `--cctv2-front` and `--cctv3-side-left`.
+3. **Backend Sensor Ingestion (Track D Phase 12):** Build simulated/live ESP32 Modbus sensor telemetry script to stream continuous smoke index, flame sensor, and heartbeat readings into Firestore.
 
