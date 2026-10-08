@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { Camera, WorkerTrack } from "@/types/safety";
+import { useSafety } from "@/context/SafetyContext";
 import { PPEChip } from "./PPEChip";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +13,9 @@ import {
   HardHat,
   Flame,
   AlertCircle,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 
 interface CameraViewerProps {
@@ -31,8 +35,23 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   hasSmokeHazard = false,
   className,
 }) => {
+  const { updateCameraName } = useSafety();
   const [showOverlay, setShowOverlay] = useState(true);
   const [isHovered, setIsHovered] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState(camera.name);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSaveName = async () => {
+    if (!editedName.trim()) return;
+    setIsSaving(true);
+    try {
+      await updateCameraName(camera.camera_id, editedName.trim());
+      setIsEditingName(false);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const zoneWorkers = workers.filter((w) => w.camera_id === camera.camera_id);
   const isOffline = camera.status === "OFFLINE";
@@ -49,11 +68,63 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     >
       {/* Stream Header */}
       <div className="bg-[#161F2B] px-3 py-2 border-b border-[#26303C] flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-          <span className="font-bold text-slate-100">{camera.name}</span>
-          <span className="text-slate-400 text-[11px] font-mono-tabular">({camera.camera_id})</span>
-        </div>
+        {isEditingName ? (
+          <div className="flex items-center gap-1.5 flex-1 max-w-sm">
+            <input
+              type="text"
+              value={editedName}
+              onChange={(e) => setEditedName(e.target.value)}
+              className="bg-slate-900 border border-blue-500 text-slate-100 text-xs px-2 py-0.5 rounded outline-none w-full"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveName();
+                if (e.key === "Escape") {
+                  setEditedName(camera.name);
+                  setIsEditingName(false);
+                }
+              }}
+            />
+            <button
+              onClick={handleSaveName}
+              disabled={isSaving}
+              className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white"
+              title="Save Camera Name"
+            >
+              <Check className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => {
+                setEditedName(camera.name);
+                setIsEditingName(false);
+              }}
+              className="p-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300"
+              title="Cancel"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span className="font-bold text-slate-100">{camera.name}</span>
+            {camera.role && (
+              <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30">
+                {camera.role}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                setEditedName(camera.name);
+                setIsEditingName(true);
+              }}
+              className="p-1 text-slate-500 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+              title="Admin: Rename Camera"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+            <span className="text-slate-400 text-[11px] font-mono-tabular">({camera.camera_id})</span>
+          </div>
+        )}
 
         <div className="flex items-center gap-2">
           <button

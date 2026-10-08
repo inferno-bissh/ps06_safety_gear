@@ -145,7 +145,7 @@ export default function CamerasPage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {cameras.map((camera) => {
               const zone = zones.find((z) => z.zone_id === camera.zone_id);
               return (

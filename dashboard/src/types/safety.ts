@@ -77,6 +77,7 @@ export interface Camera {
   stream_url?: string;
   fps: number;
   resolution: string;
+  role?: string;
 }
 
 export interface Incident {

@@ -272,10 +272,10 @@ class MultiCameraOrchestrator:
 
             # Header bars on crops
             cv2.rectangle(gate_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
-            cv2.putText(gate_resized, "[CAM_00] GATE CHOKE-POINT ACCESS FEED", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1)
+            cv2.putText(gate_resized, "[CCTV 1] GATE CHOKE-POINT (Laptop Cam)", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1)
 
             cv2.rectangle(ward_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
-            cv2.putText(ward_resized, f"[CAM_01] WARD 2 - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 0), 1)
+            cv2.putText(ward_resized, f"[CCTV 2] PRODUCTION BAY (Front View) - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
 
             composite = np.hstack([gate_resized, ward_resized])
 
@@ -284,7 +284,7 @@ class MultiCameraOrchestrator:
             footer = np.zeros((footer_h, composite.shape[1], 3), dtype=np.uint8)
             footer[:] = (15, 20, 28)
             active_list = ", ".join(self.active_checked_in_workers.keys()) or "None"
-            cv2.putText(footer, f"FPS: {fps:.1f} | ACTIVE PERSONNEL: [{active_list}]", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 220, 240), 1)
+            cv2.putText(footer, f"FPS: {fps:.1f} | ACTIVE PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 220, 240), 1)
 
             display_view = np.vstack([composite, footer])
 
@@ -296,7 +296,7 @@ class MultiCameraOrchestrator:
                 time.sleep(0.01)
                 continue
 
-            cv2.imshow("SafetyIntel Multi-Camera Operations Console", display_view)
+            cv2.imshow("SafetyIntel CCTV Operations Console", display_view)
             k = cv2.waitKey(1) & 0xFF
             if k == ord('q'):
                 break
@@ -305,18 +305,20 @@ class MultiCameraOrchestrator:
         self.ward_stream.stop()
         if not self.test_mode:
             cv2.destroyAllWindows()
-        print("[Orchestrator] Dual-camera pipeline stopped cleanly.")
+        print("[Orchestrator] Multi-CCTV pipeline stopped cleanly.")
 
 def main():
-    parser = argparse.ArgumentParser(description="SafetyIntel Dual-Camera Orchestrator")
-    parser.add_argument("--gate-source", default="0", help="Gate Camera source (webcam index or IP URL)")
-    parser.add_argument("--ward-source", default="0", help="Ward Camera source (webcam index or IP URL)")
+    parser = argparse.ArgumentParser(description="SafetyIntel Multi-CCTV Orchestrator")
+    parser.add_argument("--cctv1-gate", "--gate-source", dest="cctv1", default="0", help="CCTV 1: Laptop camera / Gate choke-point (default: 0)")
+    parser.add_argument("--cctv2-front", "--ward-source", dest="cctv2", default="0", help="CCTV 2: Front overhead view / IP phone stream (e.g. http://<ip>:8080/video)")
+    parser.add_argument("--cctv3-side-left", dest="cctv3", default=None, help="CCTV 3: Left side angle view IP phone stream")
+    parser.add_argument("--cctv4-side-right", dest="cctv4", default=None, help="CCTV 4: Right side angle view IP phone stream")
     parser.add_argument("--test-mode", action="store_true", help="Run automated test simulation without GUI")
     args = parser.parse_args()
 
     orchestrator = MultiCameraOrchestrator(
-        gate_src=args.gate_source,
-        ward_src=args.ward_source,
+        gate_src=args.cctv1,
+        ward_src=args.cctv2,
         test_mode=args.test_mode,
     )
     orchestrator.run()

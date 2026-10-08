@@ -23,6 +23,7 @@ import {
   acknowledgeIncidentInFirestore,
   resolveIncidentInFirestore,
   updateZonePPEPolicyInFirestore,
+  updateCameraInFirestore,
   setNetworkModeInFirestore,
   createIncidentInFirestore,
   seedDefaultFirestoreData,
@@ -53,6 +54,7 @@ interface SafetyContextType {
   dismissP3Takeover: () => void;
   setNetworkMode: (mode: NetworkMode) => void;
   updatePPEPolicy: (zoneId: string, policy: Partial<ZonePPEPolicy>) => void;
+  updateCameraName: (cameraId: string, newName: string) => Promise<void>;
 }
 
 const initialFacility: FacilityState = {
@@ -147,37 +149,52 @@ const initialZones: Zone[] = [
 
 const initialCameras: Camera[] = [
   {
-    camera_id: "CAM_00",
+    camera_id: "CCTV_01",
     zone_id: "GATE_ZONE",
     facility_id: "STPI_HOST_01",
-    name: "Main Facility Gate Choke-Point (Access & Face Audit)",
+    name: "CCTV 1 — Facility Gate Choke-Point (Laptop Camera)",
     status: "ONLINE",
     last_seen: new Date().toISOString(),
     stream_url: "https://images.unsplash.com/photo-1541888946425-d0fbb186c5f8?auto=format&fit=crop&w=1200&q=80",
     fps: 20,
     resolution: "1280x720",
+    role: "Gate Entry Choke-Point",
   },
   {
-    camera_id: "CAM_01",
+    camera_id: "CCTV_02",
     zone_id: "WELDING_ZONE",
     facility_id: "STPI_HOST_01",
-    name: "Welding Bay Overhead IP-Cam (Ward 2)",
+    name: "CCTV 2 — Welding Bay (Front Overhead View)",
     status: "ONLINE",
     last_seen: new Date().toISOString(),
     stream_url: "https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?auto=format&fit=crop&w=1200&q=80",
     fps: 25,
     resolution: "1280x720",
+    role: "Front View (Primary Tracking)",
   },
   {
-    camera_id: "CAM_02",
-    zone_id: "ASSEMBLY_ZONE",
+    camera_id: "CCTV_03",
+    zone_id: "WELDING_ZONE",
     facility_id: "STPI_HOST_01",
-    name: "Conveyor Line Wide Cam",
+    name: "CCTV 3 — Welding Bay (Left Side Angle View)",
     status: "ONLINE",
     last_seen: new Date().toISOString(),
     stream_url: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=1200&q=80",
-    fps: 30,
-    resolution: "1920x1080",
+    fps: 25,
+    resolution: "1280x720",
+    role: "Left Side View (Cross-Angle Angle)",
+  },
+  {
+    camera_id: "CCTV_04",
+    zone_id: "WELDING_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "CCTV 4 — Welding Bay (Right Side Angle View)",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    stream_url: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80",
+    fps: 25,
+    resolution: "1280x720",
+    role: "Right Side View (Cross-Angle Angle)",
   },
 ];
 
@@ -804,6 +821,20 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const updateCameraName = async (cameraId: string, newName: string) => {
+    setCameras((prev) =>
+      prev.map((c) => (c.camera_id === cameraId ? { ...c, name: newName } : c))
+    );
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await updateCameraInFirestore(facility.facility_id, cameraId, { name: newName });
+      } catch (e) {
+        console.error("Failed to update camera name in Firestore:", e);
+      }
+    }
+  };
+
   return (
     <SafetyContext.Provider
       value={{
@@ -830,6 +861,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         dismissP3Takeover,
         setNetworkMode,
         updatePPEPolicy,
+        updateCameraName,
       }}
     >
       {children}

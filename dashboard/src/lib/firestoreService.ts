@@ -251,6 +251,22 @@ export async function createIncidentInFirestore(
 }
 
 /**
+ * Update Camera metadata (such as custom name) in Firestore
+ */
+export async function updateCameraInFirestore(
+  facilityId: string,
+  cameraId: string,
+  updates: Partial<Camera>
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const camRef = doc(db, "facilities", facilityId, "cameras", cameraId);
+  await updateDoc(camRef, {
+    ...updates,
+    last_seen: new Date().toISOString(),
+  });
+}
+
+/**
  * Seed initial baseline data into Firestore if collections are empty
  */
 export async function seedDefaultFirestoreData(
