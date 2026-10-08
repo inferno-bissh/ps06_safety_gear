@@ -54,17 +54,30 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [showFallbackSim, setShowFallbackSim] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
+  const defaultStreamEndpoint = useMemo(() => {
+    const camId = (camera.camera_id || "").toLowerCase();
+    if (camId.includes("1") || camId.includes("gate")) return "http://localhost:5000/video/cctv1";
+    if (camId.includes("2") || camId.includes("front") || camId.includes("ward")) return "http://localhost:5000/video/cctv2";
+    if (camId.includes("3") || camId.includes("left")) return "http://localhost:5000/video/cctv3";
+    if (camId.includes("4") || camId.includes("right")) return "http://localhost:5000/video/cctv4";
+    return "http://localhost:5000/video/composite";
+  }, [camera.camera_id]);
+
   const resolvedStreamUrl = useMemo(() => {
-    const rawUrl = camera.stream_url || FALLBACK_IMAGES[camera.camera_id] || "";
     if (showFallbackSim) {
       return FALLBACK_IMAGES[camera.camera_id] || FALLBACK_IMAGES.CCTV_02;
     }
-    if (typeof window !== "undefined" && rawUrl.includes("localhost:5000")) {
-      const hostname = window.location.hostname || "localhost";
-      return rawUrl.replace("localhost", hostname);
+    let target = camera.stream_url;
+    // If stream_url is unset or still pointing to legacy static Unsplash placeholders, use the live Python stream!
+    if (!target || target.includes("unsplash.com")) {
+      target = defaultStreamEndpoint;
     }
-    return rawUrl;
-  }, [camera.stream_url, camera.camera_id, showFallbackSim]);
+    if (typeof window !== "undefined" && target.includes("localhost:5000")) {
+      const hostname = window.location.hostname || "localhost";
+      return target.replace("localhost", hostname);
+    }
+    return target;
+  }, [camera.stream_url, camera.camera_id, showFallbackSim, defaultStreamEndpoint]);
 
   const handleSaveName = async () => {
     if (!editedName.trim()) return;

@@ -4,6 +4,7 @@ import React from "react";
 import { useSafety } from "@/context/SafetyContext";
 import { ZoneCard } from "@/components/ZoneCard";
 import { PriorityBadge } from "@/components/PriorityBadge";
+import { CameraViewer } from "@/components/CameraViewer";
 import { formatDateTime, getNetworkBadge, getStatusStyle, cn } from "@/lib/utils";
 import {
   Video,
@@ -20,7 +21,10 @@ import {
 import Link from "next/link";
 
 export default function FacilityDashboardPage() {
-  const { facility, zones, incidents, systemHealth, selectIncident, acknowledgeIncident } = useSafety();
+  const { facility, zones, cameras, workerTracks, incidents, systemHealth, selectIncident, acknowledgeIncident } = useSafety();
+
+  const cctv1 = cameras.find((c) => c.camera_id === "CCTV_01") || cameras[0];
+  const cctv2 = cameras.find((c) => c.camera_id === "CCTV_02") || cameras[1] || cameras[0];
 
   const openIncidents = incidents.filter((i) => i.status !== "RESOLVED");
   const p3Count = openIncidents.filter((i) => i.priority === "P3").length;
@@ -141,6 +145,43 @@ export default function FacilityDashboardPage() {
           <div className="text-[10px] text-slate-400 mt-1">
             {openIncidents.length === 0 ? "Zero safety violations" : `${openIncidents.length} require review`}
           </div>
+        </div>
+      </div>
+
+      {/* Live CCTV Video Wall (CCTV 1 & CCTV 2) */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+            <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide flex items-center gap-2">
+              <Video className="w-4 h-4 text-emerald-400" />
+              <span>Live CCTV Operations Wall (Real-Time AI Streams · Port 5000)</span>
+            </h2>
+          </div>
+          <Link
+            href="/cameras"
+            className="text-xs text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1"
+          >
+            <span>Full Multi-Angle View & Gate Audit Register</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {cctv1 && (
+            <CameraViewer
+              camera={cctv1}
+              workers={workerTracks}
+              zoneName="Facility Gate Choke-Point"
+            />
+          )}
+          {cctv2 && (
+            <CameraViewer
+              camera={cctv2}
+              workers={workerTracks}
+              zoneName="Production Bay (Front View)"
+            />
+          )}
         </div>
       </div>
 
