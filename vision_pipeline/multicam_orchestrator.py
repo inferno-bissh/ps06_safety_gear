@@ -30,10 +30,11 @@ class MultiCameraOrchestrator:
     2. Ward / Work Area Camera (Elevated Wide-Angle): YOLOv8 tracking & event-driven PPE violation alerting.
     3. Cross-Angle Identity Resolution: Direct face matching with Gate Session Fallback.
     """
-    def __init__(self, gate_src="0", ward_src="0", cctv3_src=None, cctv4_src=None, facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False):
+    def __init__(self, gate_src="0", ward_src="0", cctv3_src=None, cctv4_src=None, facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False, no_gui=False):
         self.facility_id = facility_id
         self.zone_id = zone_id
         self.test_mode = test_mode
+        self.no_gui = no_gui
 
         print("=" * 70)
         print("  SAFETYINTEL ENTERPRISE MULTI-CCTV ORCHESTRATOR")
@@ -325,10 +326,16 @@ class MultiCameraOrchestrator:
                 time.sleep(0.01)
                 continue
 
-            cv2.imshow("SafetyIntel CCTV Operations Console", display_view)
-            k = cv2.waitKey(1) & 0xFF
-            if k == ord('q'):
-                break
+            if not self.no_gui:
+                try:
+                    cv2.imshow("SafetyIntel CCTV Operations Console", display_view)
+                    k = cv2.waitKey(1) & 0xFF
+                    if k == ord('q'):
+                        break
+                except Exception:
+                    time.sleep(0.01)
+            else:
+                time.sleep(0.01)
 
         self.gate_stream.stop()
         self.ward_stream.stop()
@@ -338,7 +345,11 @@ class MultiCameraOrchestrator:
             self.cctv4_stream.stop()
         if not self.test_mode:
             self.web_broadcaster.stop()
-            cv2.destroyAllWindows()
+            if not self.no_gui:
+                try:
+                    cv2.destroyAllWindows()
+                except Exception:
+                    pass
         print("[Orchestrator] Multi-CCTV pipeline stopped cleanly.")
 
 def main():
@@ -347,6 +358,7 @@ def main():
     parser.add_argument("--cctv2-front", "--ward-source", dest="cctv2", default="0", help="CCTV 2: Front overhead view / IP phone stream (e.g. http://<ip>:8080/video)")
     parser.add_argument("--cctv3-side-left", dest="cctv3", default=None, help="CCTV 3: Left side angle view IP phone stream")
     parser.add_argument("--cctv4-side-right", dest="cctv4", default=None, help="CCTV 4: Right side angle view IP phone stream")
+    parser.add_argument("--no-gui", "--headless", dest="no_gui", action="store_true", help="Run in headless mode without local OpenCV desktop window (web stream only)")
     parser.add_argument("--test-mode", action="store_true", help="Run automated test simulation without GUI")
     args = parser.parse_args()
 
@@ -356,6 +368,7 @@ def main():
         cctv3_src=args.cctv3,
         cctv4_src=args.cctv4,
         test_mode=args.test_mode,
+        no_gui=args.no_gui,
     )
     orchestrator.run()
 

@@ -285,14 +285,28 @@
 - **Files Modified:**
   - Modified: [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 17)
+- **Agent Focus:** Headless Daemon Mode (`--no-gui`) and Live Port 5000 Broadcaster Launch.
+- **Key Decisions & Accomplishments:**
+  - **Added Headless / Daemon Support:**
+    - Updated [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py): Added `--no-gui` / `--headless` CLI flag, guarding `cv2.imshow` and `cv2.destroyAllWindows` so orchestrator runs smoothly as a long-running background service without requiring desktop GUI handles.
+  - **Active Orchestrator Daemon Launched:**
+    - Started background daemon (`task-1114`) connecting CCTV 1 (Laptop Webcam index `0`) and CCTV 2 (Phone IP stream `http://192.168.1.5:8080/video`).
+    - Port 5000 broadcaster confirmed `ONLINE` (`http://localhost:5000/health`).
+    - Confirmed live MJPEG video streams active:
+      - `http://localhost:5000/video/cctv1` -> `multipart/x-mixed-replace`
+      - `http://localhost:5000/video/cctv2` -> `multipart/x-mixed-replace`
+    - Confirmed active Firestore incident detection and cloud publishing.
+  - **Dashboard Recovery:** The "STREAM STANDBY — PORT 5000" screen is now cleared when clicking "Retry Stream" or refreshing the page.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Re-run Orchestrator in Terminal:** In terminal `python3` (PID 26564), run:
-   `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`
-2. **Verify Live Feeds:** Both CCTV 1 (Laptop) and CCTV 2 (Phone) will now initialize live immediately without error -138.
-3. **Inspect Dashboard:** Open `http://localhost:3000/` or `http://localhost:3000/cameras` to watch the live dual-stream video wall.
+1. **View Live Footage:** Refresh [http://localhost:3000/](http://localhost:3000/) or click **Retry Stream** on the camera cards. Both CCTV 1 and CCTV 2 will render live video with real-time AI bounding boxes and PPE chips.
+2. **Test Disconnect / Reconnect:** If the phone stream drops, the auto-reconnect engine in `stream_manager.py` automatically switches to standby and recovers within 3 seconds when restored.
 
 
 
