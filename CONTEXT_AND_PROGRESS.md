@@ -301,12 +301,41 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 18)
+- **Agent Focus:** End-to-End PPE Kit Detection Integration Across Gate and Work Area Streams with Real-Time Dashboard Synchronization.
+- **Key Decisions & Accomplishments:**
+  - **Identified Root Causes of "PPE Kit Not Detecting":**
+    - Gate Stream (CCTV 1): Previously only evaluated PPE if a worker was enrolled in `worker_face_db.pkl` and face-verified. Unenrolled/guest users received zero PPE evaluations or visual badges.
+    - Ward Stream (CCTV 2): ByteTrack check previously dropped all bounding boxes if `boxes.id` was None during tracker initialization.
+    - Dashboard Disconnect: CameraViewer expected `camera.camera_id` (`CCTV_01`/`CCTV_02`), but worker mock state used legacy IDs (`CAM_00`/`CAM_01`), causing `Active Workers Tracked (0)` and missing PPE chips.
+    - Telemetry Gap: Multi-camera orchestrator never broadcasted live tracked workers to the frontend console.
+  - **Merged Full PPE Kit Detection into `multicam_orchestrator.py`:**
+    - CCTV 1 (Gate): Every detected person now undergoes full PPE inspection (Helmet & Vest) regardless of biometric enrollment status. Draws bounding box with `H:PASS [COLOR] | V:PASS [COLOR]`, top identity/worker tag, and Crown ROI dome indicator.
+    - CCTV 2 (Production Bay): Tracks every person without dropping early frames, evaluates PPE, draws tactical box, PPE badges, and violation progress counter `(x/15 frames)`.
+    - Real-Time Telemetry Broadcast: Added `_ACTIVE_WORKERS` cache and `GET /api/workers` endpoint to [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py).
+    - Added `--demo-ppe-pass` argument for demonstration environments.
+  - **Upgraded `ppe_detector.py`:**
+    - Adaptive posture calculation: Dynamically shifts head/torso crop ratios based on aspect ratio (distinguishes seated/upper-body desk views from standing workers).
+    - Added dark cap/headwear support (`DARK_CAP`) alongside White, Yellow, Orange, Blue, Red, and Green hardhats.
+    - Added industrial blue vest support with tuned coverage thresholds.
+  - **Next.js Dashboard Integration:**
+    - Created [`dashboard/src/app/api/cameras/workers/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/workers/route.ts) proxying live worker telemetry.
+    - Updated [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx) with a real-time polling synchronization effect (`syncLiveWorkers`) running every 600ms.
+    - Updated [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx) to normalize multi-format camera IDs (`CCTV_01` <-> `CAM_00`, `CCTV_02` <-> `CAM_01`).
+  - **Verification:**
+    - Tested `/api/workers` on port 5000: Confirmed live detections (`GATE_WORKER_1`, `GATE_WORKER_2`) returning live PPE statuses and bounding boxes.
+    - Tested `/api/cameras/workers` on port 3000: Returning live worker list with 200 OK.
+    - `npx tsc --noEmit`: 0 TypeScript errors.
+- **Files Created/Modified:**
+  - Created: [`dashboard/src/app/api/cameras/workers/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/workers/route.ts)
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/ppe_detector.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **View Live Footage:** Refresh [http://localhost:3000/](http://localhost:3000/) or click **Retry Stream** on the camera cards. Both CCTV 1 and CCTV 2 will render live video with real-time AI bounding boxes and PPE chips.
-2. **Test Disconnect / Reconnect:** If the phone stream drops, the auto-reconnect engine in `stream_manager.py` automatically switches to standby and recovers within 3 seconds when restored.
+1. **Verify Live Dashboard:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras). Watch the camera feeds show real-time tactical bounding boxes with `HELMET: PASS/FAIL` and `VEST: PASS/FAIL` badges, and observe the "Active Workers Tracked" panel displaying live worker chips.
+2. **Demonstrate Violation Alert:** If a person remains in front of the production bay camera (CCTV 2) without required safety gear, watch the counter increment to 15 frames, trigger cross-angle identity resolution, and publish a P1 Incident to Cloud Firestore.
 
 
 

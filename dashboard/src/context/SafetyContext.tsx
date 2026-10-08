@@ -222,37 +222,13 @@ const initialGateLogs: GateLogEntry[] = [
 
 const initialWorkers: WorkerTrack[] = [
   {
-    worker_track_id: "TRACK_17",
-    camera_id: "CAM_01",
-    zone_id: "WELDING_ZONE",
-    first_seen: new Date(Date.now() - 3600000).toISOString(),
-    last_seen: new Date().toISOString(),
-    status: "ACTIVE",
-    confidence: 0.94,
-    ppe: {
-      helmet: "PASS",
-      vest: "PASS",
-      gloves: "PASS",
-      safety_shoes: "UNKNOWN",
-    },
-    bbox: {
-      x: 18,
-      y: 22,
-      width: 24,
-      height: 65,
-      label: "Worker [TRACK_17]",
-      confidence: 0.94,
-      color: "#3b82f6",
-    },
-  },
-  {
-    worker_track_id: "TRACK_22",
-    camera_id: "CAM_01",
-    zone_id: "WELDING_ZONE",
+    worker_track_id: "TRACK_01",
+    camera_id: "CCTV_01",
+    zone_id: "GATE_ZONE",
     first_seen: new Date(Date.now() - 1800000).toISOString(),
     last_seen: new Date().toISOString(),
     status: "ACTIVE",
-    confidence: 0.91,
+    confidence: 0.96,
     ppe: {
       helmet: "PASS",
       vest: "PASS",
@@ -260,18 +236,42 @@ const initialWorkers: WorkerTrack[] = [
       safety_shoes: "PASS",
     },
     bbox: {
-      x: 58,
-      y: 28,
-      width: 22,
-      height: 62,
+      x: 32,
+      y: 18,
+      width: 36,
+      height: 68,
+      label: "Worker [TRACK_01]",
+      confidence: 0.96,
+      color: "#10b981",
+    },
+  },
+  {
+    worker_track_id: "TRACK_22",
+    camera_id: "CCTV_02",
+    zone_id: "WELDING_ZONE",
+    first_seen: new Date(Date.now() - 1200000).toISOString(),
+    last_seen: new Date().toISOString(),
+    status: "ACTIVE",
+    confidence: 0.92,
+    ppe: {
+      helmet: "PASS",
+      vest: "PASS",
+      gloves: "PASS",
+      safety_shoes: "PASS",
+    },
+    bbox: {
+      x: 45,
+      y: 22,
+      width: 28,
+      height: 64,
       label: "Worker [TRACK_22]",
-      confidence: 0.91,
-      color: "#3b82f6",
+      confidence: 0.92,
+      color: "#10b981",
     },
   },
   {
     worker_track_id: "TRACK_09",
-    camera_id: "CAM_02",
+    camera_id: "CCTV_03",
     zone_id: "ASSEMBLY_ZONE",
     first_seen: new Date(Date.now() - 900000).toISOString(),
     last_seen: new Date().toISOString(),
@@ -472,6 +472,46 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }));
     }, 5000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Real-time YOLO Worker Tracking telemetry synchronization from Vision Orchestrator
+  useEffect(() => {
+    let isMounted = true;
+    const syncLiveWorkers = async () => {
+      try {
+        const res = await fetch("/api/cameras/workers");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isMounted && data.success && Array.isArray(data.workers) && data.workers.length > 0) {
+          setWorkers((prev) => {
+            const liveMap = new Map<string, WorkerTrack>();
+            // Add live detected workers
+            data.workers.forEach((w: WorkerTrack) => {
+              liveMap.set(w.worker_track_id, w);
+            });
+            // Retain demo/other camera workers if not in active live frames
+            prev.forEach((oldW) => {
+              if (
+                !liveMap.has(oldW.worker_track_id) &&
+                oldW.camera_id !== "CCTV_01" &&
+                oldW.camera_id !== "CCTV_02"
+              ) {
+                liveMap.set(oldW.worker_track_id, oldW);
+              }
+            });
+            return Array.from(liveMap.values());
+          });
+        }
+      } catch {
+        // Broadcaster temporarily unavailable
+      }
+    };
+
+    const workerInterval = setInterval(syncLiveWorkers, 600);
+    return () => {
+      isMounted = false;
+      clearInterval(workerInterval);
+    };
   }, []);
 
   const persistIncident = async (incident: Incident) => {

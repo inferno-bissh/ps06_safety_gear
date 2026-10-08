@@ -30,11 +30,12 @@ class MultiCameraOrchestrator:
     2. Ward / Work Area Camera (Elevated Wide-Angle): YOLOv8 tracking & event-driven PPE violation alerting.
     3. Cross-Angle Identity Resolution: Direct face matching with Gate Session Fallback.
     """
-    def __init__(self, gate_src="0", ward_src="0", cctv3_src=None, cctv4_src=None, facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False, no_gui=False):
+    def __init__(self, gate_src="0", ward_src="0", cctv3_src=None, cctv4_src=None, facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False, no_gui=False, demo_ppe_pass=False):
         self.facility_id = facility_id
         self.zone_id = zone_id
         self.test_mode = test_mode
         self.no_gui = no_gui
+        self.demo_ppe_pass = demo_ppe_pass
 
         print("=" * 70)
         print("  SAFETYINTEL ENTERPRISE MULTI-CCTV ORCHESTRATOR")
@@ -59,6 +60,12 @@ class MultiCameraOrchestrator:
         # 3. PPE Compliance Evaluators
         self.gate_ppe_evaluator = WorkerPPEEvaluator(temporal_threshold=5)
         self.ward_ppe_evaluator = WorkerPPEEvaluator(temporal_threshold=15)
+        if self.demo_ppe_pass:
+            self.gate_ppe_evaluator.sim_force_helmet = True
+            self.gate_ppe_evaluator.sim_force_vest = True
+            self.ward_ppe_evaluator.sim_force_helmet = True
+            self.ward_ppe_evaluator.sim_force_vest = True
+            print("[PPE Engine] Demo override active: Forcing all detected personnel to PASS PPE.")
 
         # 4. YOLO Object Detector
         print("[AI Engine] Loading YOLOv8 nano model (yolov8n.pt)...")
@@ -92,23 +99,26 @@ class MultiCameraOrchestrator:
         if not self.test_mode:
             self.web_broadcaster.start()
 
-    def process_gate_stream(self, gate_frame: np.ndarray):
-        """Processes choke-point gate camera for identity verification and access logging."""
+    def process_gate_stream(self, gate_frame: np.ndarray) -> list:
+        """Processes choke-point gate camera for identity verification, PPE evaluation, and access logging."""
         if gate_frame is None or gate_frame.size == 0:
-            return
+            return []
 
         now = time.time()
         # Evaluate Gate once every 0.3s (3 FPS) to save CPU
         if now - self.last_gate_eval_time < 0.30:
-            return
+            return []
         self.last_gate_eval_time = now
 
         # Run person detection
-        results = self.model(gate_frame, classes=[0], verbose=False, conf=0.50)
+        results = self.model(gate_frame, classes=[0], verbose=False, conf=0.45)
         if not results or len(results[0].boxes) == 0:
-            return
+            return []
 
-        for box in results[0].boxes.xyxy.cpu().numpy():
+        gate_workers = []
+        gh, gw = gate_frame.shape[:2]
+
+        for idx, box in enumerate(results[0].boxes.xyxy.cpu().numpy()):
             x1, y1, x2, y2 = map(int, box)
             # Head/upper crop for facial verification
             head_h = max(20, int((y2 - y1) * 0.40))
@@ -116,19 +126,61 @@ class MultiCameraOrchestrator:
 
             name, score = self.face_engine.identify_face(face_crop)
             is_verified = bool(name and name not in ["Unidentified Worker", "Unregistered Worker"])
-            box_col = (0, 230, 115) if is_verified else (0, 180, 255)
+            worker_id = name if is_verified else f"GATE_WORKER_{idx + 1}"
+
+            # Evaluate PPE for every detected person on Gate Camera!
+            ppe_res = self.gate_ppe_evaluator.evaluate_ppe(gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}")
+            is_compliant = ppe_res["is_compliant"]
+            helmet = ppe_res["helmet"]
+            vest = ppe_res["vest"]
+            h_col = ppe_res.get("helmet_color", "NONE")
+            v_col = ppe_res.get("vest_color", "NONE")
+
+            # Draw visual overlay on Gate frame
+            box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
             cv2.rectangle(gate_frame, (x1, y1), (x2, y2), box_col, 2)
             cv2.rectangle(gate_frame, (x1, y1), (x2, y1 + head_h), (255, 200, 0), 1)
-            lbl = f"{name} ({score:.2f})" if is_verified else "Verifying Identity..."
-            cv2.putText(gate_frame, lbl, (x1 + 4, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_col, 1)
+
+            # Top label: Name / Worker ID + Face Confidence
+            lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [{worker_id}]"
+            cv2.putText(gate_frame, lbl, (x1 + 4, max(15, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_col, 1)
+
+            # PPE Badge on Gate Camera: HELMET & VEST
+            ppe_lbl = f"H:{helmet} [{h_col}] | V:{vest} [{v_col}]"
+            cv2.putText(gate_frame, ppe_lbl, (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+
+            # Draw Crown ROI indicator (the skull helmet inspection dome)
+            cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
+            if cx2 > cx1 and cy2 > cy1:
+                roi_col = (0, 255, 120) if helmet == "PASS" else (0, 140, 255)
+                cv2.rectangle(gate_frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+
+            # Append to telemetry
+            gate_workers.append({
+                "worker_track_id": worker_id,
+                "camera_id": "CCTV_01",
+                "zone_id": "GATE_ZONE",
+                "confidence": float(round(float(score if is_verified else 0.88), 2)),
+                "ppe": {
+                    "helmet": helmet,
+                    "vest": vest,
+                    "gloves": "PASS",
+                    "safety_shoes": "PASS",
+                },
+                "bbox": {
+                    "x": float(round((x1 / gw) * 100, 1)),
+                    "y": float(round((y1 / gh) * 100, 1)),
+                    "width": float(round(((x2 - x1) / gw) * 100, 1)),
+                    "height": float(round(((y2 - y1) / gh) * 100, 1)),
+                    "label": lbl,
+                    "color": "#10b981" if is_compliant else "#f59e0b",
+                },
+            })
 
             if is_verified:
                 checkin_time_str = datetime.now().strftime("%H:%M:%S")
                 if name not in self.active_checked_in_workers:
-                    # Evaluate initial PPE
-                    ppe_res = self.gate_ppe_evaluator.evaluate_ppe(gate_frame, (x1, y1, x2, y2), f"GATE_{name}")
-                    gate_ppe_status = "COMPLIANT" if ppe_res["is_compliant"] else "NON_COMPLIANT"
-
+                    gate_ppe_status = "COMPLIANT" if is_compliant else "NON_COMPLIANT"
                     self.active_checked_in_workers[name] = {
                         "checkin_time": checkin_time_str,
                         "status": "CHECKED_IN",
@@ -149,20 +201,29 @@ class MultiCameraOrchestrator:
                     print(f"\n[GATE AUDIT LOG] {name} checked in at {checkin_time_str} (PPE: {gate_ppe_status}, Conf: {score:.2f})")
                     self.firestore.push_gate_log(gate_log_payload)
 
-    def process_ward_stream(self, ward_frame: np.ndarray):
+        return gate_workers
+
+    def process_ward_stream(self, ward_frame: np.ndarray) -> list:
         """Processes elevated work area camera for sustained PPE tracking and cross-angle identity resolution."""
         if ward_frame is None or ward_frame.size == 0:
-            return
+            return []
 
         # Track persons with ByteTrack
-        results = self.model.track(ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=0.50, verbose=False)
-        if not results or results[0].boxes.id is None:
-            return
+        results = self.model.track(ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=0.45, verbose=False)
+        if not results or len(results[0].boxes) == 0:
+            return []
 
         boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-        track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+        confidences = results[0].boxes.conf.cpu().numpy()
+        if results[0].boxes.id is not None:
+            track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+        else:
+            track_ids = [i + 1 for i in range(len(boxes))]
 
-        for box, track_id in zip(boxes, track_ids):
+        ward_workers = []
+        wh, ww = ward_frame.shape[:2]
+
+        for box, track_id, conf in zip(boxes, track_ids, confidences):
             x1, y1, x2, y2 = box
             str_tid = f"TRACK_{track_id:02d}"
 
@@ -171,6 +232,8 @@ class MultiCameraOrchestrator:
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
+            h_col = ppe_res.get("helmet_color", "NONE")
+            v_col = ppe_res.get("vest_color", "NONE")
 
             if not is_compliant:
                 self.violation_counters[track_id] = self.violation_counters.get(track_id, 0) + 1
@@ -178,20 +241,66 @@ class MultiCameraOrchestrator:
                 self.violation_counters[track_id] = max(0, self.violation_counters.get(track_id, 0) - 1)
 
             # Draw visual overlay on Ward frame
-            box_col = (0, 230, 115) if is_compliant else ((0, 0, 235) if self.violation_counters[track_id] >= 15 else (0, 180, 255))
+            is_confirmed_viol = self.violation_counters[track_id] >= 15
+            box_col = (0, 230, 115) if is_compliant else ((0, 0, 235) if is_confirmed_viol else (0, 180, 255))
             cv2.rectangle(ward_frame, (x1, y1), (x2, y2), box_col, 2)
+
+            # Top label
             cv2.putText(
                 ward_frame,
-                f"{str_tid} | H:{helmet} V:{vest} ({self.violation_counters[track_id]}/15)",
-                (x1 + 4, y1 - 8),
+                f"Worker [{str_tid}] {conf:.2f}",
+                (x1 + 4, max(15, y1 - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 box_col,
                 1,
             )
 
+            # PPE Badge on Ward Camera
+            ppe_badge = f"H:{helmet} [{h_col}] | V:{vest} [{v_col}]"
+            cv2.putText(ward_frame, ppe_badge, (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+
+            # Violation counter indicator
+            if not is_compliant:
+                cv2.putText(
+                    ward_frame,
+                    f"Violation: {self.violation_counters[track_id]}/15",
+                    (x1 + 4, y1 + 36),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38,
+                    (0, 0, 255) if is_confirmed_viol else (0, 180, 255),
+                    1,
+                )
+
+            # Crown ROI indicator
+            cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
+            if cx2 > cx1 and cy2 > cy1:
+                roi_col = (0, 255, 120) if helmet == "PASS" else (0, 140, 255)
+                cv2.rectangle(ward_frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+
+            ward_workers.append({
+                "worker_track_id": str_tid,
+                "camera_id": "CCTV_02",
+                "zone_id": "WELDING_ZONE",
+                "confidence": float(round(float(conf), 2)),
+                "ppe": {
+                    "helmet": helmet,
+                    "vest": vest,
+                    "gloves": "PASS",
+                    "safety_shoes": "PASS",
+                },
+                "bbox": {
+                    "x": float(round((x1 / ww) * 100, 1)),
+                    "y": float(round((y1 / wh) * 100, 1)),
+                    "width": float(round(((x2 - x1) / ww) * 100, 1)),
+                    "height": float(round(((y2 - y1) / wh) * 100, 1)),
+                    "label": f"Worker [{str_tid}]",
+                    "color": "#10b981" if is_compliant else ("#ef4444" if is_confirmed_viol else "#f59e0b"),
+                },
+            })
+
             # Trigger Cross-Angle Identity Resolution when violation persists >= 15 frames
-            if self.violation_counters[track_id] >= 15:
+            if is_confirmed_viol:
                 person_crop = ward_frame[max(0, y1):min(ward_frame.shape[0], y2), max(0, x1):min(ward_frame.shape[1], x2)]
                 matched_worker, match_method = self._resolve_worker_identity(person_crop)
 
@@ -235,6 +344,8 @@ class MultiCameraOrchestrator:
                 # Debounce to prevent duplicate spam
                 self.violation_counters[track_id] = -30
 
+        return ward_workers
+
     def _resolve_worker_identity(self, person_crop: np.ndarray) -> tuple[str, str]:
         """
         Attempts direct face recognition on the person crop.
@@ -275,11 +386,15 @@ class MultiCameraOrchestrator:
                 time.sleep(0.02)
                 continue
 
-            # 2. Process Gate stream (Entry access verification)
-            self.process_gate_stream(gate_frame)
+            # 2. Process Gate stream (Entry access verification & PPE)
+            gate_workers = self.process_gate_stream(gate_frame) or []
 
             # 3. Process Ward stream (PPE tracking & event-driven alert)
-            self.process_ward_stream(ward_frame)
+            ward_workers = self.process_ward_stream(ward_frame) or []
+
+            # Broadcast live worker tracking telemetry for dashboard
+            if not self.test_mode:
+                self.web_broadcaster.update_workers(gate_workers + ward_workers)
 
             # 4. Render Dual-Stream Composite Tactical Display
             h_sub, w_sub = 360, 640
@@ -300,7 +415,8 @@ class MultiCameraOrchestrator:
             footer = np.zeros((footer_h, composite.shape[1], 3), dtype=np.uint8)
             footer[:] = (15, 20, 28)
             active_list = ", ".join(self.active_checked_in_workers.keys()) or "None"
-            cv2.putText(footer, f"FPS: {fps:.1f} | ACTIVE PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 220, 240), 1)
+            total_active_workers = len(gate_workers) + len(ward_workers)
+            cv2.putText(footer, f"FPS: {fps:.1f} | TRACKED WORKERS: {total_active_workers} | PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 220, 240), 1)
 
             display_view = np.vstack([composite, footer])
 
@@ -359,6 +475,7 @@ def main():
     parser.add_argument("--cctv3-side-left", dest="cctv3", default=None, help="CCTV 3: Left side angle view IP phone stream")
     parser.add_argument("--cctv4-side-right", dest="cctv4", default=None, help="CCTV 4: Right side angle view IP phone stream")
     parser.add_argument("--no-gui", "--headless", dest="no_gui", action="store_true", help="Run in headless mode without local OpenCV desktop window (web stream only)")
+    parser.add_argument("--demo-ppe-pass", dest="demo_ppe_pass", action="store_true", help="Force all PPE compliance checks to PASS for demonstration")
     parser.add_argument("--test-mode", action="store_true", help="Run automated test simulation without GUI")
     args = parser.parse_args()
 
@@ -369,6 +486,7 @@ def main():
         cctv4_src=args.cctv4,
         test_mode=args.test_mode,
         no_gui=args.no_gui,
+        demo_ppe_pass=args.demo_ppe_pass,
     )
     orchestrator.run()
 

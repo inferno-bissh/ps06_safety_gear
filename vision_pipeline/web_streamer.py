@@ -1,8 +1,9 @@
+import json
 import cv2
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import numpy as np
 
 # Global in-memory frame cache
@@ -14,6 +15,9 @@ _ACTIVE_FRAMES: Dict[str, Optional[bytes]] = {
     "cctv4": None,
     "composite": None,
 }
+
+_WORKERS_LOCK = threading.Lock()
+_ACTIVE_WORKERS: List[dict] = []
 
 class MJPEGStreamHandler(BaseHTTPRequestHandler):
     """
@@ -44,6 +48,15 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"status":"ONLINE","engine":"SafetyIntel MJPEG Streamer"}')
+            return
+        elif path == "api/workers" or path == "workers":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with _WORKERS_LOCK:
+                data = json.dumps(_ACTIVE_WORKERS).encode("utf-8")
+            self.wfile.write(data)
             return
 
         # Start multipart MJPEG stream
@@ -109,6 +122,12 @@ class WebStreamBroadcaster:
         if ret:
             with _FRAME_LOCK:
                 _ACTIVE_FRAMES[channel] = buffer.tobytes()
+
+    def update_workers(self, workers_data: list):
+        """Updates active tracked worker metadata for dashboard live polling."""
+        global _ACTIVE_WORKERS
+        with _WORKERS_LOCK:
+            _ACTIVE_WORKERS = list(workers_data)
 
     def stop(self):
         if self.server:

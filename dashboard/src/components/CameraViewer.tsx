@@ -93,7 +93,30 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     }
   };
 
-  const zoneWorkers = workers.filter((w) => w.camera_id === camera.camera_id);
+  const zoneWorkers = useMemo(() => {
+    const targetId = (camera.camera_id || "").toUpperCase();
+    return workers.filter((w) => {
+      const wCam = (w.camera_id || "").toUpperCase();
+      if (wCam === targetId) return true;
+      if (
+        (targetId === "CCTV_01" || targetId.includes("GATE")) &&
+        (wCam === "CAM_00" || wCam === "GATE" || wCam.includes("CCTV_01") || wCam.includes("CCTV1") || wCam === "CAM_00_GATE")
+      ) return true;
+      if (
+        (targetId === "CCTV_02" || targetId.includes("WARD") || targetId.includes("FRONT")) &&
+        (wCam === "CAM_01" || wCam === "WARD" || wCam === "FRONT" || wCam.includes("CCTV_02") || wCam.includes("CCTV2") || wCam === "CAM_01_WARD")
+      ) return true;
+      if (
+        (targetId === "CCTV_03" || targetId.includes("LEFT")) &&
+        (wCam === "CAM_02" || wCam.includes("CCTV_03") || wCam.includes("CCTV3"))
+      ) return true;
+      if (
+        (targetId === "CCTV_04" || targetId.includes("RIGHT")) &&
+        (wCam === "CAM_03" || wCam.includes("CCTV_04") || wCam.includes("CCTV4"))
+      ) return true;
+      return false;
+    });
+  }, [workers, camera.camera_id]);
   const isOffline = camera.status === "OFFLINE";
 
   return (

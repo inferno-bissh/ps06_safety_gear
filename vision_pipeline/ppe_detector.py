@@ -46,13 +46,26 @@ class WorkerPPEEvaluator:
                 "crown_roi": (0, 0, 0, 0),
             }
 
-        # 1. Head Region (Top 22% of bounding box)
-        head_y2 = y1 + int(box_h * 0.22)
+        # Adaptive posture calculation:
+        # If aspect ratio is wide (box_h / box_w < 1.6), user is sitting / close-up upper-body.
+        # If aspect ratio is tall (>= 1.6), user is full-body standing.
+        aspect_ratio = box_h / max(1, box_w)
+        if aspect_ratio < 1.6:
+            head_h_ratio = 0.35
+            torso_y1_ratio = 0.30
+            torso_y2_ratio = 0.95
+        else:
+            head_h_ratio = 0.25
+            torso_y1_ratio = 0.22
+            torso_y2_ratio = 0.68
+
+        # 1. Head Region
+        head_y2 = y1 + int(box_h * head_h_ratio)
         head_crop = frame[y1:head_y2, x1:x2]
 
-        # 2. Torso Region (20% to 65% of bounding box)
-        torso_y1 = y1 + int(box_h * 0.20)
-        torso_y2 = y1 + int(box_h * 0.65)
+        # 2. Torso Region
+        torso_y1 = y1 + int(box_h * torso_y1_ratio)
+        torso_y2 = y1 + int(box_h * torso_y2_ratio)
         torso_crop = frame[torso_y1:torso_y2, x1:x2]
 
         # Computer Vision Evaluation (Color & Brightness in HSV)
@@ -182,6 +195,9 @@ class WorkerPPEEvaluator:
         # 6. Safety Green Hardhat: H: 40-85, S: 60-255, V: 65-255
         mask_green = cv2.inRange(crown_hsv, np.array([40, 60, 65]), np.array([85, 255, 255]))
 
+        # 7. Dark Cap / Industrial Hardhat: V <= 65
+        mask_dark = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 255, 65]))
+
         # Calculate pixel counts for each color
         color_counts = {
             "WHITE": cv2.countNonZero(mask_white),
@@ -190,6 +206,7 @@ class WorkerPPEEvaluator:
             "BLUE": cv2.countNonZero(mask_blue),
             "RED": cv2.countNonZero(mask_red),
             "GREEN": cv2.countNonZero(mask_green),
+            "DARK_CAP": cv2.countNonZero(mask_dark),
         }
 
         white_px = color_counts["WHITE"]
@@ -202,16 +219,16 @@ class WorkerPPEEvaluator:
         best_color, max_pixels = max(color_counts.items(), key=lambda item: item[1])
         best_ratio = max_pixels / crown_pixels
 
-        # Decision Thresholds:
-        # White Hardhat: >= 20% coverage in the central skull crown
-        # Colored Hardhat: >= 18% coverage in the central skull crown
-        if best_color == "WHITE" and best_ratio >= 0.20:
+        # Decision Thresholds (15% coverage in the central skull crown)
+        if best_color == "WHITE" and best_ratio >= 0.15:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
-        elif best_color != "WHITE" and best_ratio >= 0.18:
+        elif best_color == "DARK_CAP" and best_ratio >= 0.22:
+            return True, "DARK_CAP", white_ratio, colored_ratio, crown_roi_global
+        elif best_color not in ["WHITE", "DARK_CAP"] and best_ratio >= 0.14:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif white_ratio >= 0.20:
+        elif white_ratio >= 0.15:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
-        elif colored_ratio >= 0.18:
+        elif colored_ratio >= 0.15:
             return True, "COLORED", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global
@@ -227,20 +244,27 @@ class WorkerPPEEvaluator:
             return False, "NONE", 0.0
 
         # Neon Yellow / Lime: H: 22-45, S: 70-255, V: 80-255
-        mask_neon = cv2.inRange(hsv, np.array([22, 70, 80]), np.array([45, 255, 255]))
+        mask_neon = cv2.inRange(hsv, np.array([22, 60, 70]), np.array([45, 255, 255]))
 
-        # Hi-Vis Orange: H: 5-22, S: 90-255, V: 85-255
-        mask_orange = cv2.inRange(hsv, np.array([5, 90, 85]), np.array([22, 255, 255]))
+        # Hi-Vis Orange: H: 5-22, S: 80-255, V: 75-255
+        mask_orange = cv2.inRange(hsv, np.array([5, 80, 75]), np.array([22, 255, 255]))
+
+        # Industrial Blue Vest: H: 95-130, S: 70-255, V: 65-255
+        mask_blue = cv2.inRange(hsv, np.array([95, 70, 65]), np.array([130, 255, 255]))
 
         neon_px = cv2.countNonZero(mask_neon)
         orange_px = cv2.countNonZero(mask_orange)
+        blue_px = cv2.countNonZero(mask_blue)
 
         neon_ratio = neon_px / total_pixels
         orange_ratio = orange_px / total_pixels
+        blue_ratio = blue_px / total_pixels
 
-        if neon_ratio >= 0.14:
+        if neon_ratio >= 0.10:
             return True, "NEON_YELLOW", neon_ratio
-        elif orange_ratio >= 0.14:
+        elif orange_ratio >= 0.10:
             return True, "HI_VIS_ORANGE", orange_ratio
+        elif blue_ratio >= 0.12:
+            return True, "SAFETY_BLUE", blue_ratio
 
-        return False, "NONE", max(neon_ratio, orange_ratio)
+        return False, "NONE", max(neon_ratio, orange_ratio, blue_ratio)
