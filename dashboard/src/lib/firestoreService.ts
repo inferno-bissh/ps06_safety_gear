@@ -134,6 +134,40 @@ export function subscribeSystemHealth(
   );
 }
 
+export interface GateLogEntry {
+  log_id: string;
+  worker_name: string;
+  checkin_time: string;
+  timestamp_display?: string;
+  gate_id: string;
+  ppe_status: "COMPLIANT" | "NON_COMPLIANT";
+  match_confidence?: number;
+}
+
+/**
+ * Real-time listener for Gate Check-in Audit Logs
+ */
+export function subscribeGateLogs(
+  facilityId: string,
+  onData: (logs: GateLogEntry[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const gateCol = collection(db, "facilities", facilityId, "gate_logs");
+  return onSnapshot(
+    gateCol,
+    (snapshot) => {
+      const logs: GateLogEntry[] = [];
+      snapshot.forEach((docSnap) => {
+        logs.push(docSnap.data() as GateLogEntry);
+      });
+      logs.sort((a, b) => (b.checkin_time > a.checkin_time ? 1 : -1));
+      onData(logs);
+    },
+    onError
+  );
+}
+
 /**
  * Acknowledge an incident in Firestore
  */

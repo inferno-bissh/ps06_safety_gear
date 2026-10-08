@@ -18,6 +18,8 @@ import {
   subscribeIncidents,
   subscribeCameras,
   subscribeSystemHealth,
+  subscribeGateLogs,
+  GateLogEntry,
   acknowledgeIncidentInFirestore,
   resolveIncidentInFirestore,
   updateZonePPEPolicyInFirestore,
@@ -31,6 +33,7 @@ interface SafetyContextType {
   zones: Zone[];
   cameras: Camera[];
   incidents: Incident[];
+  gateLogs: GateLogEntry[];
   workerTracks: WorkerTrack[];
   systemHealth: SystemHealthItem[];
   selectedIncident: Incident | null;
@@ -144,15 +147,26 @@ const initialZones: Zone[] = [
 
 const initialCameras: Camera[] = [
   {
+    camera_id: "CAM_00",
+    zone_id: "GATE_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Main Facility Gate Choke-Point (Access & Face Audit)",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    stream_url: "https://images.unsplash.com/photo-1541888946425-d0fbb186c5f8?auto=format&fit=crop&w=1200&q=80",
+    fps: 20,
+    resolution: "1280x720",
+  },
+  {
     camera_id: "CAM_01",
     zone_id: "WELDING_ZONE",
     facility_id: "STPI_HOST_01",
-    name: "Welding Bay Overhead IP-Cam",
+    name: "Welding Bay Overhead IP-Cam (Ward 2)",
     status: "ONLINE",
     last_seen: new Date().toISOString(),
     stream_url: "https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?auto=format&fit=crop&w=1200&q=80",
     fps: 25,
-    resolution: "1920x1080",
+    resolution: "1280x720",
   },
   {
     camera_id: "CAM_02",
@@ -164,6 +178,27 @@ const initialCameras: Camera[] = [
     stream_url: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=1200&q=80",
     fps: 30,
     resolution: "1920x1080",
+  },
+];
+
+const initialGateLogs: GateLogEntry[] = [
+  {
+    log_id: "GATE-001",
+    worker_name: "Rahul Sharma",
+    checkin_time: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+    timestamp_display: "09:30:15 AM",
+    gate_id: "GATE_01",
+    ppe_status: "COMPLIANT",
+    match_confidence: 0.98,
+  },
+  {
+    log_id: "GATE-002",
+    worker_name: "Amit Patel",
+    checkin_time: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+    timestamp_display: "09:40:22 AM",
+    gate_id: "GATE_01",
+    ppe_status: "COMPLIANT",
+    match_confidence: 0.95,
   },
 ];
 
@@ -326,6 +361,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [cameras, setCameras] = useState<Camera[]>(initialCameras);
   const [workers, setWorkers] = useState<WorkerTrack[]>(initialWorkers);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [gateLogs, setGateLogs] = useState<GateLogEntry[]>(initialGateLogs);
   const [systemHealth, setSystemHealth] = useState<SystemHealthItem[]>(initialHealth);
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [isP3TakeoverActive, setIsP3TakeoverActive] = useState(false);
@@ -383,6 +419,14 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       (err: unknown) => console.warn("[Firestore] Cameras sync error:", err)
     );
 
+    const unsubGate = subscribeGateLogs(
+      facilityId,
+      (data: GateLogEntry[]) => {
+        if (data && data.length > 0) setGateLogs(data);
+      },
+      (err: unknown) => console.warn("[Firestore] Gate logs sync error:", err)
+    );
+
     const unsubHealth = subscribeSystemHealth(
       facilityId,
       (data: SystemHealthItem[]) => {
@@ -396,6 +440,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       unsubZones && unsubZones();
       unsubIncidents && unsubIncidents();
       unsubCameras && unsubCameras();
+      unsubGate && unsubGate();
       unsubHealth && unsubHealth();
     };
   }, [dataSource, facility.facility_id]);
@@ -766,6 +811,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         zones,
         cameras,
         incidents,
+        gateLogs,
         workerTracks: workers,
         systemHealth,
         selectedIncident,
