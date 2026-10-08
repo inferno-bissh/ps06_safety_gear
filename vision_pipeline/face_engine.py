@@ -130,8 +130,11 @@ class WorkerFaceEngine:
                 if norm > 1e-6:
                     feature = feature / norm
                 return feature.flatten().astype(np.float32)
+            else:
+                # No face detected in the image
+                return None
 
-        # Resilient fallback using upper crop
+        # Resilient fallback using upper crop when native models unavailable
         return self._extract_fallback_embedding(image)
 
     def enroll_worker(self, name: str, face_images: List[np.ndarray]) -> bool:

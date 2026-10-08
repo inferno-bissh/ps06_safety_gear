@@ -139,3 +139,32 @@ class FirestoreSyncClient:
         else:
             path = f"facilities/{self.facility_id}/zones/{zone_id}"
             return self._rest_patch(path, data)
+
+    def push_gate_log(self, gate_log: dict) -> bool:
+        """Pushes a gate check-in entry to facilities/{facility_id}/gate_logs/{log_id}."""
+        log_id = gate_log.get("log_id")
+        if not log_id:
+            import time
+            log_id = f"GATE-{int(time.time()) % 1000000:06d}"
+            gate_log["log_id"] = log_id
+
+        if self.use_admin_sdk:
+            try:
+                doc_ref = (
+                    self.admin_db.collection("facilities")
+                    .document(self.facility_id)
+                    .collection("gate_logs")
+                    .document(log_id)
+                )
+                doc_ref.set(gate_log, merge=True)
+                logger.info(f"[Firestore] Pushed Gate Log {log_id} for {gate_log.get('worker_name')}.")
+                return True
+            except Exception as e:
+                logger.error(f"[Firestore Admin Error]: {e}")
+                return False
+        else:
+            path = f"facilities/{self.facility_id}/gate_logs/{log_id}"
+            success = self._rest_patch(path, gate_log)
+            if success:
+                logger.info(f"[Firestore REST] Gate Log {log_id} for {gate_log.get('worker_name')} published to Cloud.")
+            return success
