@@ -269,13 +269,30 @@
   - Created: [`dashboard/src/app/api/cameras/test-ip/route.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/api/cameras/test-ip/route.ts), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/ConnectCameraModal.tsx)
   - Modified: [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/page.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/app/cameras/page.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-09 (Session 16)
+- **Agent Focus:** Diagnostic & Recovery of Terminal PID 26564 (`Error number -138` resolution), Hardware Lock Cleanup, and Multi-Camera Live Verification.
+- **Key Decisions & Accomplishments:**
+  - **Process Investigation:**
+    - Diagnosed terminal PID 26564: A lingering background process (`PID 3460`) was launched at 03:44 before the phone server was active, throwing Error -138 (`ETIMEDOUT`).
+    - Identified a second zombie process (`PID 2032`) running for over 1.7 hours locking port 5000 and camera handles.
+  - **Process Termination & Resource Liberation:**
+    - Force-killed both zombie Python instances (`PID 2032`, `PID 3460`) via PowerShell.
+    - Verified port 5000 is completely released and ready for clean rebinding.
+  - **Direct Hardware & Network Video Verification:**
+    - **Laptop Webcam (0):** Verified `cv2.VideoCapture(0, cv2.CAP_DSHOW)` opens cleanly and yields frames (`480x640x3`).
+    - **Phone Camera (`192.168.1.5:8080/video`):** Verified `cv2.VideoCapture('http://192.168.1.5:8080/video')` connects in <1s and yields full-resolution frames (`1080x1920x3`).
+  - **Recovery Action:** Terminal 26564 is back at the command prompt, ready to re-run with live video from both cameras simultaneously.
+- **Files Modified:**
+  - Modified: [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Test in Browser:** Open `http://localhost:3000/` or `http://localhost:3000/cameras`, click the `(+) Connect IP Camera` button, type or verify the IP `192.168.1.5`, click "Test Link" to see the live green badge, and click "Connect & Save Camera".
-2. **Launch Orchestrator with Phone Stream:** Run `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`.
-3. **Verify Multi-Camera Footage:** Confirm both CCTV 1 (Laptop Gate Cam) and CCTV 2 (Phone Production Bay Cam) are rendering live annotated video simultaneously on the dashboard.
+1. **Re-run Orchestrator in Terminal:** In terminal `python3` (PID 26564), run:
+   `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front "http://192.168.1.5:8080/video"`
+2. **Verify Live Feeds:** Both CCTV 1 (Laptop) and CCTV 2 (Phone) will now initialize live immediately without error -138.
+3. **Inspect Dashboard:** Open `http://localhost:3000/` or `http://localhost:3000/cameras` to watch the live dual-stream video wall.
 
 
 
