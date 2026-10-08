@@ -3,7 +3,6 @@ import {
   doc,
   onSnapshot,
   setDoc,
-  updateDoc,
   Unsubscribe,
 } from "firebase/firestore";
 import { db } from "./firebase";

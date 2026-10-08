@@ -331,17 +331,19 @@
   - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/ppe_detector.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
 ### Session: 2026-10-09 (Session 19)
-- **Agent Focus:** Resolution of FirebaseError (`No document to update: .../cameras/CCTV_01`) via Safe Upsert (`setDoc` with `merge: true`).
+- **Agent Focus:** Resolution of FirebaseError (`No document to update: .../cameras/CCTV_01`) via Safe Upsert (`setDoc` with `merge: true`) & Full Next.js Turbopack Build Validation.
 - **Key Decisions & Accomplishments:**
   - **Root Cause Analysis:**
     - In [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), `updateCameraInFirestore` previously called `updateDoc(camRef, updates)`.
-    - `updateDoc` requires the target document to exist beforehand in Cloud Firestore. If the document has not yet been seeded or was created under an alternative ID, Firebase throws `FirebaseError: No document to update: .../cameras/CCTV_01`.
+    - `updateDoc` requires the target document to exist beforehand in Cloud Firestore. If `CCTV_01` was not previously seeded into Firestore, the Firebase Client SDK rejected the operation with: `FirebaseError: No document to update: projects/ps06-safety-gear/databases/(default)/documents/facilities/STPI_HOST_01/cameras/CCTV_01`.
   - **Implemented Safe Upsert Mechanism:**
-    - Switched `updateCameraInFirestore` to `setDoc(camRef, { camera_id: cameraId, ...updates, last_seen: ... }, { merge: true })`.
-    - Also fortified `updateZonePPEPolicyInFirestore`, `setNetworkModeInFirestore`, `acknowledgeIncidentInFirestore`, and `resolveIncidentInFirestore` with `setDoc(..., { merge: true })` to guarantee that all updates safely create the document if missing without throwing exceptions.
+    - Replaced `updateDoc` with `setDoc(camRef, { camera_id: cameraId, ...updates, last_seen: new Date().toISOString() }, { merge: true })`.
+    - Also fortified all Firestore write methods (`updateZonePPEPolicyInFirestore`, `setNetworkModeInFirestore`, `acknowledgeIncidentInFirestore`, and `resolveIncidentInFirestore`) with `setDoc(..., { merge: true })` to guarantee idempotent upsert across all collections.
+    - Cleaned up unused `updateDoc` imports; verified zero remaining occurrences of `updateDoc` across the codebase.
   - **Verification:**
-    - `npx tsc --noEmit` -> 0 errors.
-    - Verified Next.js dashboard routes return 200 OK.
+    - Ran full production build (`npm run build --prefix dashboard`): Succeeded in 13.9s with 0 errors across all 13 pages and API routes.
+    - Confirmed live Python multicam orchestrator running on port 5000 (`/health`, `/api/workers`, `/video/cctv1`, `/video/cctv2`).
+    - Verified Next.js dev server on port 3000 hot-reloaded cleanly.
 - **Files Modified:**
   - Modified: [`dashboard/src/lib/firestoreService.ts`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/lib/firestoreService.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
@@ -349,8 +351,9 @@
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Verify Camera Updates:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras). Click the pencil icon to rename `CCTV 1` or click `(+) Connect IP Camera` to save a custom IP URL. Confirm the change saves cleanly without any console `FirebaseError`.
+1. **Verify Camera Updates in Browser:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras). Click the pencil icon to rename `CCTV 1` or click `(+) Connect IP Camera` to save a custom IP URL. Confirm the change saves cleanly without any console `FirebaseError`.
 2. **Demonstrate End-to-End Safety Workflow:** Observe live dual-stream video ingestion, real-time PPE chip detection, and incident reporting to Firestore.
+
 
 
 
