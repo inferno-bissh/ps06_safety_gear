@@ -1,0 +1,800 @@
+"use client";
+
+import React, { createContext, useContext, useState, useEffect } from "react";
+import {
+  FacilityState,
+  Zone,
+  Camera,
+  Incident,
+  WorkerTrack,
+  SystemHealthItem,
+  NetworkMode,
+  ZonePPEPolicy,
+} from "@/types/safety";
+import { isFirebaseConfigured } from "@/lib/firebase";
+import {
+  subscribeFacility,
+  subscribeZones,
+  subscribeIncidents,
+  subscribeCameras,
+  subscribeSystemHealth,
+  acknowledgeIncidentInFirestore,
+  resolveIncidentInFirestore,
+  updateZonePPEPolicyInFirestore,
+  setNetworkModeInFirestore,
+  createIncidentInFirestore,
+  seedDefaultFirestoreData,
+} from "@/lib/firestoreService";
+
+interface SafetyContextType {
+  facility: FacilityState;
+  zones: Zone[];
+  cameras: Camera[];
+  incidents: Incident[];
+  workerTracks: WorkerTrack[];
+  systemHealth: SystemHealthItem[];
+  selectedIncident: Incident | null;
+  isP3TakeoverActive: boolean;
+  p3EmergencyIncident: Incident | null;
+  isSimulationMode: boolean;
+  dataSource: "FIRESTORE" | "SIMULATION";
+  isFirebaseAvailable: boolean;
+  activeScenario: string | null;
+  // Actions
+  setDataSource: (source: "FIRESTORE" | "SIMULATION") => void;
+  seedFirestore: () => Promise<void>;
+  triggerScenario: (scenario: "A" | "B" | "C" | "D" | "E" | "RESET") => void;
+  selectIncident: (incident: Incident | null) => void;
+  acknowledgeIncident: (incidentId: string) => void;
+  resolveIncident: (incidentId: string, note?: string) => void;
+  dismissP3Takeover: () => void;
+  setNetworkMode: (mode: NetworkMode) => void;
+  updatePPEPolicy: (zoneId: string, policy: Partial<ZonePPEPolicy>) => void;
+}
+
+const initialFacility: FacilityState = {
+  facility_id: "STPI_HOST_01",
+  name: "BPUT Industrial Facility Alpha",
+  current_network_mode: "LAN",
+  total_cameras: 2,
+  active_zones: 3,
+  emergency_siren_active: false,
+  emergency_response_available: true,
+  last_heartbeat: new Date().toISOString(),
+  heartbeat_timeout_seconds: 15,
+};
+
+const initialZones: Zone[] = [
+  {
+    zone_id: "WELDING_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Welding & Fabrication Bay",
+    description: "Heavy sparks, welding arcs, and thermal cutting operations.",
+    floor_area: "Bay 1 - Ground Floor",
+    status: "ACTIVE",
+    current_priority: "P0",
+    camera_id: "CAM_01",
+    worker_count: 2,
+    fire_detected: false,
+    smoke_detected: false,
+    sensor_flame: false,
+    sensor_smoke_raw: 142,
+    sensor_smoke_index: 0.14,
+    node_status: "ONLINE",
+    ppe_policy: {
+      helmet_required: true,
+      vest_required: true,
+      gloves_required: true,
+      safety_shoes_required: true,
+      policy_version: 2,
+      updated_at: new Date().toISOString(),
+    },
+  },
+  {
+    zone_id: "ASSEMBLY_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Electronics Assembly Area",
+    description: "Component assembly, conveyor lines, and pick-and-place robots.",
+    floor_area: "Floor 2 - Cleanroom Section",
+    status: "ACTIVE",
+    current_priority: "P0",
+    camera_id: "CAM_02",
+    worker_count: 1,
+    fire_detected: false,
+    smoke_detected: false,
+    sensor_flame: false,
+    sensor_smoke_raw: 88,
+    sensor_smoke_index: 0.08,
+    node_status: "ONLINE",
+    ppe_policy: {
+      helmet_required: true,
+      vest_required: true,
+      gloves_required: false,
+      safety_shoes_required: true,
+      policy_version: 1,
+      updated_at: new Date().toISOString(),
+    },
+  },
+  {
+    zone_id: "OFFICE_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Supervisory Control Office",
+    description: "Administrative desk workstations and control monitors.",
+    floor_area: "Mezzanine Floor",
+    status: "ACTIVE",
+    current_priority: "P0",
+    camera_id: "CAM_03",
+    worker_count: 1,
+    fire_detected: false,
+    smoke_detected: false,
+    sensor_flame: false,
+    sensor_smoke_raw: 45,
+    sensor_smoke_index: 0.04,
+    node_status: "ONLINE",
+    ppe_policy: {
+      helmet_required: false,
+      vest_required: false,
+      gloves_required: false,
+      safety_shoes_required: false,
+      policy_version: 1,
+      updated_at: new Date().toISOString(),
+    },
+  },
+];
+
+const initialCameras: Camera[] = [
+  {
+    camera_id: "CAM_01",
+    zone_id: "WELDING_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Welding Bay Overhead IP-Cam",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    stream_url: "https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?auto=format&fit=crop&w=1200&q=80",
+    fps: 25,
+    resolution: "1920x1080",
+  },
+  {
+    camera_id: "CAM_02",
+    zone_id: "ASSEMBLY_ZONE",
+    facility_id: "STPI_HOST_01",
+    name: "Conveyor Line Wide Cam",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    stream_url: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=1200&q=80",
+    fps: 30,
+    resolution: "1920x1080",
+  },
+];
+
+const initialWorkers: WorkerTrack[] = [
+  {
+    worker_track_id: "TRACK_17",
+    camera_id: "CAM_01",
+    zone_id: "WELDING_ZONE",
+    first_seen: new Date(Date.now() - 3600000).toISOString(),
+    last_seen: new Date().toISOString(),
+    status: "ACTIVE",
+    confidence: 0.94,
+    ppe: {
+      helmet: "PASS",
+      vest: "PASS",
+      gloves: "PASS",
+      safety_shoes: "UNKNOWN",
+    },
+    bbox: {
+      x: 18,
+      y: 22,
+      width: 24,
+      height: 65,
+      label: "Worker [TRACK_17]",
+      confidence: 0.94,
+      color: "#3b82f6",
+    },
+  },
+  {
+    worker_track_id: "TRACK_22",
+    camera_id: "CAM_01",
+    zone_id: "WELDING_ZONE",
+    first_seen: new Date(Date.now() - 1800000).toISOString(),
+    last_seen: new Date().toISOString(),
+    status: "ACTIVE",
+    confidence: 0.91,
+    ppe: {
+      helmet: "PASS",
+      vest: "PASS",
+      gloves: "PASS",
+      safety_shoes: "PASS",
+    },
+    bbox: {
+      x: 58,
+      y: 28,
+      width: 22,
+      height: 62,
+      label: "Worker [TRACK_22]",
+      confidence: 0.91,
+      color: "#3b82f6",
+    },
+  },
+  {
+    worker_track_id: "TRACK_09",
+    camera_id: "CAM_02",
+    zone_id: "ASSEMBLY_ZONE",
+    first_seen: new Date(Date.now() - 900000).toISOString(),
+    last_seen: new Date().toISOString(),
+    status: "ACTIVE",
+    confidence: 0.88,
+    ppe: {
+      helmet: "PASS",
+      vest: "PASS",
+      gloves: "PASS",
+      safety_shoes: "PASS",
+    },
+    bbox: {
+      x: 35,
+      y: 25,
+      width: 26,
+      height: 60,
+      label: "Worker [TRACK_09]",
+      confidence: 0.88,
+      color: "#3b82f6",
+    },
+  },
+];
+
+const initialHealth: SystemHealthItem[] = [
+  {
+    id: "h_vision",
+    name: "Cloud Vision Inference (YOLOv8)",
+    category: "AI",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "ONNX Runtime 28.4 FPS · Inference Latency 24ms",
+  },
+  {
+    id: "h_esp32",
+    name: "Central ESP32 Gateway",
+    category: "GATEWAY",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Host ID: STPI_HOST_01 · Primary WiFi Active",
+    is_safety_critical: true,
+  },
+  {
+    id: "h_modbus_1",
+    name: "Modbus Node 1 (Welding Bay)",
+    category: "NODE",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Addr: 0x01 · Heartbeat incrementing (Reg 40005: 14820)",
+  },
+  {
+    id: "h_modbus_2",
+    name: "Modbus Node 2 (Assembly Area)",
+    category: "NODE",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Addr: 0x02 · Heartbeat incrementing (Reg 40005: 14818)",
+  },
+  {
+    id: "h_flame_1",
+    name: "IR Flame Sensor 1",
+    category: "SENSOR",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Welding Zone · Reading: Normal (0)",
+  },
+  {
+    id: "h_smoke_1",
+    name: "MQ-2 Gas/Smoke Sensor 1",
+    category: "SENSOR",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Welding Zone · Raw: 142 (Index 0.14)",
+  },
+  {
+    id: "h_net_lan",
+    name: "Facility LAN/WiFi Interface",
+    category: "NETWORK",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "SSID: FACTORY_SECURE_LAN · Latency 14ms",
+  },
+  {
+    id: "h_net_gsm",
+    name: "ESP32 Cellular Backup (SIM7600)",
+    category: "NETWORK",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Standby backup connection ready · Signal: 84%",
+  },
+  {
+    id: "h_backend",
+    name: "Firebase Cloud Services",
+    category: "BACKEND",
+    status: "ONLINE",
+    last_seen: new Date().toISOString(),
+    detail: "Firestore, Storage, FCM active",
+  },
+];
+
+const SafetyContext = createContext<SafetyContextType | undefined>(undefined);
+
+export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [facility, setFacility] = useState<FacilityState>(initialFacility);
+  const [zones, setZones] = useState<Zone[]>(initialZones);
+  const [cameras, setCameras] = useState<Camera[]>(initialCameras);
+  const [workers, setWorkers] = useState<WorkerTrack[]>(initialWorkers);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [systemHealth, setSystemHealth] = useState<SystemHealthItem[]>(initialHealth);
+  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  const [isP3TakeoverActive, setIsP3TakeoverActive] = useState(false);
+  const [p3EmergencyIncident, setP3EmergencyIncident] = useState<Incident | null>(null);
+  const [activeScenario, setActiveScenario] = useState<string | null>(null);
+  
+  // Dual-mode state: Firestore vs Simulation
+  const [dataSource, setDataSource] = useState<"FIRESTORE" | "SIMULATION">("SIMULATION");
+  const [isFirebaseAvailable, setIsFirebaseAvailable] = useState<boolean>(false);
+
+  useEffect(() => {
+    const configured = isFirebaseConfigured();
+    setIsFirebaseAvailable(configured);
+    if (configured) {
+      setDataSource("FIRESTORE");
+    }
+  }, []);
+
+  // Set up live Firestore real-time listeners when in FIRESTORE mode
+  useEffect(() => {
+    if (dataSource !== "FIRESTORE" || !isFirebaseConfigured()) return;
+
+    const facilityId = facility.facility_id || "STPI_HOST_01";
+    console.log("[Firestore] Attaching live real-time listeners for facility:", facilityId);
+
+    const unsubFacility = subscribeFacility(
+      facilityId,
+      (data: FacilityState) => {
+        if (data) setFacility((prev) => ({ ...prev, ...data }));
+      },
+      (err: unknown) => console.warn("[Firestore] Facility sync error:", err)
+    );
+
+    const unsubZones = subscribeZones(
+      facilityId,
+      (data: Zone[]) => {
+        if (data && data.length > 0) setZones(data);
+      },
+      (err: unknown) => console.warn("[Firestore] Zones sync error:", err)
+    );
+
+    const unsubIncidents = subscribeIncidents(
+      facilityId,
+      (data: Incident[]) => {
+        if (data) setIncidents(data);
+      },
+      (err: unknown) => console.warn("[Firestore] Incidents sync error:", err)
+    );
+
+    const unsubCameras = subscribeCameras(
+      facilityId,
+      (data: Camera[]) => {
+        if (data && data.length > 0) setCameras(data);
+      },
+      (err: unknown) => console.warn("[Firestore] Cameras sync error:", err)
+    );
+
+    const unsubHealth = subscribeSystemHealth(
+      facilityId,
+      (data: SystemHealthItem[]) => {
+        if (data && data.length > 0) setSystemHealth(data);
+      },
+      (err: unknown) => console.warn("[Firestore] Health sync error:", err)
+    );
+
+    return () => {
+      unsubFacility && unsubFacility();
+      unsubZones && unsubZones();
+      unsubIncidents && unsubIncidents();
+      unsubCameras && unsubCameras();
+      unsubHealth && unsubHealth();
+    };
+  }, [dataSource, facility.facility_id]);
+
+  // Heartbeat ticker
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFacility((prev) => ({
+        ...prev,
+        last_heartbeat: new Date().toISOString(),
+      }));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const persistIncident = async (incident: Incident) => {
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await createIncidentInFirestore(facility.facility_id, incident);
+      } catch (err) {
+        console.warn("[Firestore] Could not persist incident:", err);
+      }
+    }
+  };
+
+  const seedFirestore = async () => {
+    if (!isFirebaseConfigured()) {
+      alert("Firebase is not configured in .env.local!");
+      return;
+    }
+    try {
+      await seedDefaultFirestoreData(
+        facility.facility_id,
+        initialFacility,
+        initialZones,
+        initialCameras,
+        initialHealth
+      );
+      alert("Success: Cloud Firestore initialized with baseline facility, zones, cameras, and diagnostics!");
+    } catch (err: any) {
+      console.error("Firestore seeding failed:", err);
+      alert("Seeding failed: " + (err.message || String(err)));
+    }
+  };
+
+  // Scenario Trigger Function covering Scenarios A through E
+  const triggerScenario = (scenario: "A" | "B" | "C" | "D" | "E" | "RESET") => {
+    setActiveScenario(scenario);
+    const now = new Date().toISOString();
+
+    if (scenario === "RESET") {
+      setZones(initialZones);
+      setWorkers(initialWorkers);
+      setIncidents([]);
+      setSystemHealth(initialHealth);
+      setFacility(initialFacility);
+      setIsP3TakeoverActive(false);
+      setP3EmergencyIncident(null);
+      setSelectedIncident(null);
+      return;
+    }
+
+    if (scenario === "A") {
+      // Scenario A: PPE Violation
+      const newIncident: Incident = {
+        incident_id: `PPE-${Date.now().toString().slice(-6)}`,
+        facility_id: "STPI_HOST_01",
+        zone_id: "WELDING_ZONE",
+        zone_name: "Welding & Fabrication Bay",
+        camera_id: "CAM_01",
+        worker_id: "TRACK_17",
+        source_event_type: "PPE_VIOLATION",
+        priority: "P1",
+        timestamp: now,
+        confidence: 0.94,
+        status: "OPEN",
+        required_action: "SUPERVISOR REVIEW — ISSUE PPE COMPLIANCE WARNING",
+        decision_reason: "Helmet required by WELDING_ZONE policy; worker tracked without helmet for >5 consecutive seconds",
+        evidence_image: "https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?auto=format&fit=crop&w=800&q=80",
+        vision_evidence: {
+          missing_items: ["HELMET"],
+        },
+        network_mode: facility.current_network_mode,
+      };
+
+      setWorkers((prev) =>
+        prev.map((w) =>
+          w.worker_track_id === "TRACK_17"
+            ? {
+                ...w,
+                ppe: { ...w.ppe, helmet: "FAIL" },
+                bbox: { ...w.bbox!, color: "#eab308", label: "Worker [TRACK_17] - HELMET FAIL" },
+              }
+            : w
+        )
+      );
+
+      setZones((prev) =>
+        prev.map((z) =>
+          z.zone_id === "WELDING_ZONE"
+            ? { ...z, current_priority: z.current_priority === "P0" ? "P1" : z.current_priority }
+            : z
+        )
+      );
+
+      setIncidents((prev) => [newIncident, ...prev]);
+      persistIncident(newIncident);
+    } else if (scenario === "B") {
+      // Scenario B: Confirmed Fire (Vision Fire + Physical Flame Sensor -> P3 Critical)
+      const fireIncident: Incident = {
+        incident_id: `HAZ-${Date.now().toString().slice(-6)}`,
+        facility_id: "STPI_HOST_01",
+        zone_id: "WELDING_ZONE",
+        zone_name: "Welding & Fabrication Bay",
+        camera_id: "CAM_01",
+        source_event_type: "FIRE",
+        priority: "P3",
+        timestamp: now,
+        confidence: 0.96,
+        status: "OPEN",
+        required_action: "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
+        decision_reason: "MULTIMODAL CONVERGENCE: Vision Fire (0.96) confirmed by Modbus IR Flame Sensor (Reg 40001: 2) -> Critical P3 Takeover",
+        evidence_image: "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+        vision_evidence: {
+          fire: true,
+          smoke: true,
+        },
+        sensor_evidence: {
+          flame_detected: true,
+          gas_sensor_raw: 785,
+          smoke_index: 0.78,
+        },
+        network_mode: facility.current_network_mode,
+      };
+
+      setZones((prev) =>
+        prev.map((z) =>
+          z.zone_id === "WELDING_ZONE"
+            ? {
+                ...z,
+                current_priority: "P3",
+                fire_detected: true,
+                smoke_detected: true,
+                sensor_flame: true,
+                sensor_smoke_raw: 785,
+                sensor_smoke_index: 0.78,
+              }
+            : z
+        )
+      );
+
+      setFacility((prev) => ({
+        ...prev,
+        emergency_siren_active: prev.emergency_response_available ? true : false,
+      }));
+
+      setIncidents((prev) => [fireIncident, ...prev]);
+      setP3EmergencyIncident(fireIncident);
+      setIsP3TakeoverActive(true);
+      persistIncident(fireIncident);
+    } else if (scenario === "C") {
+      // Scenario C: Sensor-Only Smoke
+      const sensorSmokeIncident: Incident = {
+        incident_id: `SMK-${Date.now().toString().slice(-6)}`,
+        facility_id: "STPI_HOST_01",
+        zone_id: "ASSEMBLY_ZONE",
+        zone_name: "Electronics Assembly Area",
+        camera_id: "CAM_02",
+        source_event_type: "SMOKE",
+        priority: "P2",
+        timestamp: now,
+        confidence: 0.82,
+        status: "OPEN",
+        required_action: "INSPECTION REQUIRED — SENSOR TRIGGERED WITHOUT VISUAL CONFIRMATION",
+        decision_reason: "Physical MQ-2 gas/smoke sensor reading elevated (Reg 40003: 0.48), but camera video shows clear air -> P2 Verification Alert",
+        evidence_image: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
+        sensor_evidence: {
+          flame_detected: false,
+          gas_sensor_raw: 480,
+          smoke_index: 0.48,
+        },
+        network_mode: facility.current_network_mode,
+      };
+
+      setZones((prev) =>
+        prev.map((z) =>
+          z.zone_id === "ASSEMBLY_ZONE"
+            ? {
+                ...z,
+                current_priority: z.current_priority === "P3" ? "P3" : "P2",
+                sensor_smoke_raw: 480,
+                sensor_smoke_index: 0.48,
+              }
+            : z
+        )
+      );
+
+      setIncidents((prev) => [sensorSmokeIncident, ...prev]);
+      persistIncident(sensorSmokeIncident);
+    } else if (scenario === "D") {
+      // Scenario D: Visual Smoke
+      const visualSmokeIncident: Incident = {
+        incident_id: `VIS-${Date.now().toString().slice(-6)}`,
+        facility_id: "STPI_HOST_01",
+        zone_id: "WELDING_ZONE",
+        zone_name: "Welding & Fabrication Bay",
+        camera_id: "CAM_01",
+        source_event_type: "SMOKE",
+        priority: "P2",
+        timestamp: now,
+        confidence: 0.88,
+        status: "OPEN",
+        required_action: "OPERATOR VISUAL VERIFICATION REQUIRED — CAMERA DETECTS SMOKE CLOUD",
+        decision_reason: "AI vision model identified smoke column (0.88 conf), physical sensor below threshold -> P2 Suspicious Alert",
+        evidence_image: "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+        vision_evidence: {
+          smoke: true,
+          fire: false,
+        },
+        network_mode: facility.current_network_mode,
+      };
+
+      setZones((prev) =>
+        prev.map((z) =>
+          z.zone_id === "WELDING_ZONE"
+            ? {
+                ...z,
+                current_priority: z.current_priority === "P3" ? "P3" : "P2",
+                smoke_detected: true,
+              }
+            : z
+        )
+      );
+
+      setIncidents((prev) => [visualSmokeIncident, ...prev]);
+      persistIncident(visualSmokeIncident);
+    } else if (scenario === "E") {
+      // Scenario E: Negative Test (Total Connectivity Loss)
+      setFacility((prev) => ({
+        ...prev,
+        current_network_mode: "OFFLINE",
+        emergency_response_available: false,
+        emergency_siren_active: false,
+      }));
+
+      setSystemHealth((prev) =>
+        prev.map((h) =>
+          h.category === "GATEWAY" || h.category === "NETWORK"
+            ? { ...h, status: "OFFLINE", detail: "Comms timeout — Heartbeat missed >15s" }
+            : h
+        )
+      );
+    }
+  };
+
+  const acknowledgeIncident = async (incidentId: string) => {
+    setIncidents((prev) =>
+      prev.map((inc) =>
+        inc.incident_id === incidentId
+          ? {
+              ...inc,
+              status: "ACKNOWLEDGED",
+              acknowledged_at: new Date().toISOString(),
+              acknowledged_by: "Supervisor VICTUS",
+            }
+          : inc
+      )
+    );
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await acknowledgeIncidentInFirestore(facility.facility_id, incidentId, "Supervisor VICTUS");
+      } catch (e) {
+        console.error("Failed to acknowledge in Firestore:", e);
+      }
+    }
+  };
+
+  const resolveIncident = async (incidentId: string, note?: string) => {
+    setIncidents((prev) =>
+      prev.map((inc) =>
+        inc.incident_id === incidentId
+          ? {
+              ...inc,
+              status: "RESOLVED",
+              resolved_at: new Date().toISOString(),
+              resolved_by: "Supervisor VICTUS",
+              resolution_note: note || "Resolved after on-site review",
+            }
+          : inc
+      )
+    );
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await resolveIncidentInFirestore(facility.facility_id, incidentId, "Supervisor VICTUS", note);
+      } catch (e) {
+        console.error("Failed to resolve in Firestore:", e);
+      }
+    }
+
+    // Recalculate zone priorities if needed
+    setZones((prev) =>
+      prev.map((z) => {
+        const remainingForZone = incidents.filter(
+          (i) => i.zone_id === z.zone_id && i.incident_id !== incidentId && i.status !== "RESOLVED"
+        );
+        let maxP: any = "P0";
+        if (remainingForZone.some((i) => i.priority === "P3")) maxP = "P3";
+        else if (remainingForZone.some((i) => i.priority === "P2")) maxP = "P2";
+        else if (remainingForZone.some((i) => i.priority === "P1")) maxP = "P1";
+        return { ...z, current_priority: maxP };
+      })
+    );
+  };
+
+  const dismissP3Takeover = () => {
+    setIsP3TakeoverActive(false);
+  };
+
+  const setNetworkMode = async (mode: NetworkMode) => {
+    setFacility((prev) => ({
+      ...prev,
+      current_network_mode: mode,
+      emergency_response_available: mode !== "OFFLINE",
+      emergency_siren_active: mode === "OFFLINE" ? false : prev.emergency_siren_active,
+    }));
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await setNetworkModeInFirestore(facility.facility_id, mode);
+      } catch (e) {
+        console.error("Failed to update network mode in Firestore:", e);
+      }
+    }
+  };
+
+  const updatePPEPolicy = async (zoneId: string, policy: Partial<ZonePPEPolicy>) => {
+    setZones((prev) =>
+      prev.map((z) =>
+        z.zone_id === zoneId
+          ? {
+              ...z,
+              ppe_policy: {
+                ...z.ppe_policy,
+                ...policy,
+                policy_version: z.ppe_policy.policy_version + 1,
+                updated_at: new Date().toISOString(),
+              },
+            }
+          : z
+      )
+    );
+
+    if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
+      try {
+        await updateZonePPEPolicyInFirestore(facility.facility_id, zoneId, policy);
+      } catch (e) {
+        console.error("Failed to update PPE policy in Firestore:", e);
+      }
+    }
+  };
+
+  return (
+    <SafetyContext.Provider
+      value={{
+        facility,
+        zones,
+        cameras,
+        incidents,
+        workerTracks: workers,
+        systemHealth,
+        selectedIncident,
+        isP3TakeoverActive,
+        p3EmergencyIncident,
+        isSimulationMode: dataSource === "SIMULATION",
+        dataSource,
+        isFirebaseAvailable,
+        activeScenario,
+        setDataSource,
+        seedFirestore,
+        triggerScenario,
+        selectIncident: setSelectedIncident,
+        acknowledgeIncident,
+        resolveIncident,
+        dismissP3Takeover,
+        setNetworkMode,
+        updatePPEPolicy,
+      }}
+    >
+      {children}
+    </SafetyContext.Provider>
+  );
+};
+
+export const useSafety = () => {
+  const context = useContext(SafetyContext);
+  if (!context) {
+    throw new Error("useSafety must be used within a SafetyProvider");
+  }
+  return context;
+};

@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-base: #0b0f14;
+    --bg-surface: #121821;
+    --bg-surface-raised: #1a222c;
+    --border-default: #26303c;
+    --border-subtle: #1b2430;
+    --text-primary: #e6edf3;
+    --text-secondary: #9aa7b2;
+    --text-muted: #6b7785;
+
+    /* Priority Tokens */
+    --priority-p0: #10b981; /* Emerald Normal */
+    --priority-p1: #eab308; /* Amber PPE Warning */
+    --priority-p2: #f97316; /* Orange Suspicious Hazard */
+    --priority-p3: #ef4444; /* Red Confirmed Emergency */
+
+    /* PPE Tokens */
+    --ppe-pass: #22c55e;
+    --ppe-fail: #ef4444;
+    --ppe-unknown: #8b5cf6;
+
+    /* Status Tokens */
+    --status-online: #22c55e;
+    --status-offline: #64748b;
+    --status-warning: #eab308;
+    --status-critical: #ef4444;
+    --status-degraded: #f97316;
+    --status-info: #3b82f6;
+  }
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+  overflow-x: hidden;
+}
+
+/* Tabular numbers for monitoring and clocks */
+.font-mono-tabular {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom industrial scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

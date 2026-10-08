@@ -1,0 +1,252 @@
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  Unsubscribe,
+} from "firebase/firestore";
+import { db } from "./firebase";
+import {
+  FacilityState,
+  Zone,
+  Camera,
+  Incident,
+  SystemHealthItem,
+  NetworkMode,
+  ZonePPEPolicy,
+} from "@/types/safety";
+
+/**
+ * Real-time listener for the main facility doc
+ */
+export function subscribeFacility(
+  facilityId: string,
+  onData: (facility: FacilityState) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const facilityRef = doc(db, "facilities", facilityId);
+  return onSnapshot(
+    facilityRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        onData(snapshot.data() as FacilityState);
+      }
+    },
+    onError
+  );
+}
+
+/**
+ * Real-time listener for facility zones
+ */
+export function subscribeZones(
+  facilityId: string,
+  onData: (zones: Zone[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const zonesCol = collection(db, "facilities", facilityId, "zones");
+  return onSnapshot(
+    zonesCol,
+    (snapshot) => {
+      const zones: Zone[] = [];
+      snapshot.forEach((docSnap) => {
+        zones.push(docSnap.data() as Zone);
+      });
+      onData(zones);
+    },
+    onError
+  );
+}
+
+/**
+ * Real-time listener for facility incidents
+ */
+export function subscribeIncidents(
+  facilityId: string,
+  onData: (incidents: Incident[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const incidentsCol = collection(db, "facilities", facilityId, "incidents");
+  return onSnapshot(
+    incidentsCol,
+    (snapshot) => {
+      const incidents: Incident[] = [];
+      snapshot.forEach((docSnap) => {
+        incidents.push(docSnap.data() as Incident);
+      });
+      // Sort newest first
+      incidents.sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      onData(incidents);
+    },
+    onError
+  );
+}
+
+/**
+ * Real-time listener for cameras
+ */
+export function subscribeCameras(
+  facilityId: string,
+  onData: (cameras: Camera[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const camerasCol = collection(db, "facilities", facilityId, "cameras");
+  return onSnapshot(
+    camerasCol,
+    (snapshot) => {
+      const cameras: Camera[] = [];
+      snapshot.forEach((docSnap) => {
+        cameras.push(docSnap.data() as Camera);
+      });
+      onData(cameras);
+    },
+    onError
+  );
+}
+
+/**
+ * Real-time listener for system health diagnostics
+ */
+export function subscribeSystemHealth(
+  facilityId: string,
+  onData: (items: SystemHealthItem[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe | null {
+  if (!db) return null;
+  const healthCol = collection(db, "facilities", facilityId, "system_health");
+  return onSnapshot(
+    healthCol,
+    (snapshot) => {
+      const items: SystemHealthItem[] = [];
+      snapshot.forEach((docSnap) => {
+        items.push(docSnap.data() as SystemHealthItem);
+      });
+      onData(items);
+    },
+    onError
+  );
+}
+
+/**
+ * Acknowledge an incident in Firestore
+ */
+export async function acknowledgeIncidentInFirestore(
+  facilityId: string,
+  incidentId: string,
+  supervisorUid: string = "SUPERVISOR_01"
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const incidentRef = doc(db, "facilities", facilityId, "incidents", incidentId);
+  await updateDoc(incidentRef, {
+    status: "ACKNOWLEDGED",
+    acknowledged_at: new Date().toISOString(),
+    acknowledged_by: supervisorUid,
+  });
+}
+
+/**
+ * Resolve an incident in Firestore
+ */
+export async function resolveIncidentInFirestore(
+  facilityId: string,
+  incidentId: string,
+  supervisorUid: string = "SUPERVISOR_01",
+  note?: string
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const incidentRef = doc(db, "facilities", facilityId, "incidents", incidentId);
+  await updateDoc(incidentRef, {
+    status: "RESOLVED",
+    resolved_at: new Date().toISOString(),
+    resolved_by: supervisorUid,
+    resolution_note: note || "Resolved after on-site review",
+  });
+}
+
+/**
+ * Update PPE policy for a zone
+ */
+export async function updateZonePPEPolicyInFirestore(
+  facilityId: string,
+  zoneId: string,
+  policy: Partial<ZonePPEPolicy>
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const zoneRef = doc(db, "facilities", facilityId, "zones", zoneId);
+  await updateDoc(zoneRef, {
+    "ppe_policy.helmet_required": policy.helmet_required,
+    "ppe_policy.vest_required": policy.vest_required,
+    "ppe_policy.gloves_required": policy.gloves_required,
+    "ppe_policy.safety_shoes_required": policy.safety_shoes_required,
+    "ppe_policy.updated_at": new Date().toISOString(),
+  });
+}
+
+/**
+ * Update facility network mode
+ */
+export async function setNetworkModeInFirestore(
+  facilityId: string,
+  mode: NetworkMode
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const facilityRef = doc(db, "facilities", facilityId);
+  await updateDoc(facilityRef, {
+    current_network_mode: mode,
+    emergency_response_available: mode !== "OFFLINE",
+  });
+}
+
+/**
+ * Create or push a new incident
+ */
+export async function createIncidentInFirestore(
+  facilityId: string,
+  incident: Incident
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+  const incidentRef = doc(db, "facilities", facilityId, "incidents", incident.incident_id);
+  await setDoc(incidentRef, incident);
+}
+
+/**
+ * Seed initial baseline data into Firestore if collections are empty
+ */
+export async function seedDefaultFirestoreData(
+  facilityId: string,
+  initialFacility: FacilityState,
+  initialZones: Zone[],
+  initialCameras: Camera[],
+  initialHealth: SystemHealthItem[]
+): Promise<void> {
+  if (!db) throw new Error("Firestore not initialized");
+
+  // 1. Facility document
+  const facilityRef = doc(db, "facilities", facilityId);
+  await setDoc(facilityRef, initialFacility, { merge: true });
+
+  // 2. Zones
+  for (const zone of initialZones) {
+    const zoneRef = doc(db, "facilities", facilityId, "zones", zone.zone_id);
+    await setDoc(zoneRef, zone, { merge: true });
+  }
+
+  // 3. Cameras
+  for (const camera of initialCameras) {
+    const camRef = doc(db, "facilities", facilityId, "cameras", camera.camera_id);
+    await setDoc(camRef, camera, { merge: true });
+  }
+
+  // 4. System Health Items
+  for (const item of initialHealth) {
+    const healthRef = doc(db, "facilities", facilityId, "system_health", item.id);
+    await setDoc(healthRef, item, { merge: true });
+  }
+}

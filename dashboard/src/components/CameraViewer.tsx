@@ -1,0 +1,227 @@
+"use client";
+
+import React, { useState } from "react";
+import { Camera, WorkerTrack } from "@/types/safety";
+import { PPEChip } from "./PPEChip";
+import { cn } from "@/lib/utils";
+import {
+  Video,
+  Layers,
+  WifiOff,
+  Maximize2,
+  HardHat,
+  Flame,
+  AlertCircle,
+} from "lucide-react";
+
+interface CameraViewerProps {
+  camera: Camera;
+  workers: WorkerTrack[];
+  zoneName: string;
+  hasFireHazard?: boolean;
+  hasSmokeHazard?: boolean;
+  className?: string;
+}
+
+export const CameraViewer: React.FC<CameraViewerProps> = ({
+  camera,
+  workers,
+  zoneName,
+  hasFireHazard = false,
+  hasSmokeHazard = false,
+  className,
+}) => {
+  const [showOverlay, setShowOverlay] = useState(true);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const zoneWorkers = workers.filter((w) => w.camera_id === camera.camera_id);
+  const isOffline = camera.status === "OFFLINE";
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg overflow-hidden border border-[#26303C] bg-[#0E131A] font-mono flex flex-col shadow-lg transition-all",
+        hasFireHazard && "border-red-600 ring-2 ring-red-500/40",
+        className
+      )}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* Stream Header */}
+      <div className="bg-[#161F2B] px-3 py-2 border-b border-[#26303C] flex items-center justify-between text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+          <span className="font-bold text-slate-100">{camera.name}</span>
+          <span className="text-slate-400 text-[11px] font-mono-tabular">({camera.camera_id})</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowOverlay(!showOverlay)}
+            className={cn(
+              "px-2 py-0.5 rounded text-[11px] border flex items-center gap-1 transition-colors",
+              showOverlay
+                ? "bg-blue-600/20 text-blue-400 border-blue-500/40"
+                : "bg-slate-800 text-slate-400 border-slate-700"
+            )}
+            title="Toggle YOLOv8 AI inference bounding boxes"
+          >
+            <Layers className="w-3 h-3" />
+            <span>AI Overlay {showOverlay ? "ON" : "OFF"}</span>
+          </button>
+
+          <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono-tabular">
+            {camera.fps} FPS · {camera.resolution}
+          </span>
+        </div>
+      </div>
+
+      {/* Video Canvas Container */}
+      <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+        {isOffline ? (
+          <div className="text-center p-6 space-y-2">
+            <WifiOff className="w-10 h-10 text-slate-600 mx-auto animate-pulse" />
+            <div className="text-sm font-bold text-slate-400">CAMERA STREAM OFFLINE</div>
+            <p className="text-xs text-slate-500">Attempting automatic cloud reconnection...</p>
+          </div>
+        ) : (
+          <>
+            {/* Background Stream Feed Image */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={camera.stream_url}
+              alt={camera.name}
+              className="w-full h-full object-cover select-none"
+            />
+
+            {/* AI Bounding Boxes & Tracking Layer */}
+            {showOverlay && (
+              <div className="absolute inset-0 pointer-events-none">
+                {/* Fire Overlay if active */}
+                {hasFireHazard && (
+                  <div className="absolute top-1/3 left-1/4 w-48 h-36 border-2 border-red-500 bg-red-600/25 rounded animate-pulse">
+                    <div className="bg-red-600 text-white font-bold text-[10px] px-1.5 py-0.5 inline-flex items-center gap-1">
+                      <Flame className="w-3 h-3" /> FIRE DETECTED [0.96]
+                    </div>
+                  </div>
+                )}
+
+                {/* Smoke Overlay if active */}
+                {hasSmokeHazard && (
+                  <div className="absolute top-1/4 right-1/4 w-52 h-44 border-2 border-orange-500 bg-orange-600/20 rounded animate-pulse">
+                    <div className="bg-orange-600 text-white font-bold text-[10px] px-1.5 py-0.5 inline-flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> SMOKE PLUME [0.85]
+                    </div>
+                  </div>
+                )}
+
+                {/* Worker Bounding Boxes */}
+                {zoneWorkers.map((worker) => {
+                  if (!worker.bbox) return null;
+                  const isViolation = Object.values(worker.ppe).includes("FAIL");
+
+                  return (
+                    <div
+                      key={worker.worker_track_id}
+                      className={cn(
+                        "absolute rounded border-2 transition-all",
+                        isViolation
+                          ? "border-amber-400 bg-amber-500/10 shadow-lg shadow-amber-500/20"
+                          : "border-blue-400 bg-blue-500/10"
+                      )}
+                      style={{
+                        top: `${worker.bbox.y}%`,
+                        left: `${worker.bbox.x}%`,
+                        width: `${worker.bbox.width}%`,
+                        height: `${worker.bbox.height}%`,
+                      }}
+                    >
+                      {/* Worker Tracker Header Tag */}
+                      <div
+                        className={cn(
+                          "absolute -top-6 left-0 text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap flex items-center gap-1",
+                          isViolation ? "bg-amber-500 text-slate-950" : "bg-blue-600 text-white"
+                        )}
+                      >
+                        <HardHat className="w-3 h-3" />
+                        <span>{worker.worker_track_id} ({(worker.confidence * 100).toFixed(0)}%)</span>
+                      </div>
+
+                      {/* PPE Inspection Tag at bottom */}
+                      <div className="absolute -bottom-6 left-0 flex gap-1">
+                        <span
+                          className={cn(
+                            "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                            worker.ppe.helmet === "PASS"
+                              ? "bg-emerald-600 text-white"
+                              : worker.ppe.helmet === "FAIL"
+                              ? "bg-red-600 text-white"
+                              : "bg-purple-800 text-purple-200"
+                          )}
+                        >
+                          H: {worker.ppe.helmet}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                            worker.ppe.vest === "PASS"
+                              ? "bg-emerald-600 text-white"
+                              : worker.ppe.vest === "FAIL"
+                              ? "bg-red-600 text-white"
+                              : "bg-purple-800 text-purple-200"
+                          )}
+                        >
+                          V: {worker.ppe.vest}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Live Indicator overlay watermark */}
+        <div className="absolute top-2 left-2 bg-black/70 text-slate-300 px-2 py-0.5 rounded text-[10px] flex items-center gap-1.5 font-bold">
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <span>LIVE RTSP PUSH • {zoneName}</span>
+        </div>
+      </div>
+
+      {/* Tracked Personnel Footer Panel */}
+      <div className="bg-[#121821] p-2.5 border-t border-[#26303C] space-y-2">
+        <div className="flex items-center justify-between text-[11px] text-slate-400 font-bold uppercase">
+          <span>Active Workers Tracked ({zoneWorkers.length})</span>
+          <span className="text-slate-500">Model: YOLOv8-Custom (7 Classes)</span>
+        </div>
+
+        {zoneWorkers.length === 0 ? (
+          <div className="text-[11px] text-slate-500 py-1">No personnel detected in camera frame.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {zoneWorkers.map((w) => (
+              <div
+                key={w.worker_track_id}
+                className="bg-[#1A222C] p-2 rounded border border-slate-800 flex flex-wrap items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                  <span className="text-blue-400">{w.worker_track_id}</span>
+                  <span className="text-slate-500 text-[10px]">
+                    [{(w.confidence * 100).toFixed(0)}%]
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <PPEChip label="Helmet" status={w.ppe.helmet} />
+                  <PPEChip label="Vest" status={w.ppe.vest} />
+                  <PPEChip label="Gloves" status={w.ppe.gloves} />
+                  <PPEChip label="Footwear" status={w.ppe.safety_shoes} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production / Next.js builds
+.next/
+out/
+build/
+dist/
+
+# Python cache & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+venv/
+ENV/
+
+# Large model weights (keep base yolov8n.pt if tracked, ignore giant downloads)
+*.onnx.download
+*.tar.gz
+
+# Logs & temp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# Private keys
+serviceAccountKey.json
+dashboard/.env.local
