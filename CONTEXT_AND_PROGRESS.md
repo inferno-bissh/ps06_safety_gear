@@ -181,9 +181,13 @@
     - Added `LIVE MJPEG (30 FPS)` status watermark.
     - Added standby overlay when Python backend is offline, complete with the terminal startup command, a `Retry Stream` button, and an instant `Show Demo Feed` fallback.
   - **Dashboard Default Endpoints:** Configured default stream URLs in [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx) to `http://localhost:5000/video/cctv1`, `cctv2`, `cctv3`, and `cctv4`.
-  - **Type Checking:** Verified complete clean build (`npx tsc --noEmit` -> 0 errors).
+  - **IDE Diagnostics & Module Resolution Fix:**
+    - Resolved `'camera.stream_url' is possibly 'undefined'` in [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx) by safely defaulting to `FALLBACK_IMAGES[camera.camera_id]`.
+    - Resolved `Cannot find module '@/lib/firebase'` and `Cannot find module '@/lib/firestoreService'` in [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx) by converting to clean relative paths (`../lib/firebase`, `../lib/firestoreService`).
+    - Added root [`tsconfig.json`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/tsconfig.json) at workspace root mapping `@/*` to `./dashboard/src/*` so the IDE TypeScript language server seamlessly recognizes all path aliases when opening workspace files.
+    - Verified `npx tsc --noEmit` and `npx --prefix dashboard tsc --project tsconfig.json --noEmit` both pass with 0 errors (`[GIT COMMIT] 73bfa460`).
 - **Files Created/Modified:**
-  - Created: [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py)
+  - Created: [`vision_pipeline/web_streamer.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/web_streamer.py), [`tsconfig.json`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/tsconfig.json)
   - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
 ---
