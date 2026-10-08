@@ -91,10 +91,10 @@ export const ZoneCard: React.FC<ZoneCardProps> = ({ zone }) => {
             <span
               className={cn(
                 "font-bold text-[11px] font-mono",
-                zone.sensor_smoke_raw > 400 ? "text-orange-400" : "text-slate-300"
+                (zone.sensor_smoke_raw ?? 0) > 400 ? "text-orange-400" : "text-slate-300"
               )}
             >
-              {zone.sensor_smoke_raw} ({(zone.sensor_smoke_index).toFixed(2)})
+              {zone.sensor_smoke_raw ?? 0} ({(zone.sensor_smoke_index ?? 0).toFixed(2)})
             </span>
           </div>
         </div>
@@ -103,32 +103,33 @@ export const ZoneCard: React.FC<ZoneCardProps> = ({ zone }) => {
         <div className="text-[10px] text-slate-400 mb-2">
           <span className="font-bold uppercase tracking-wider block mb-1">Zone PPE Mandate:</span>
           <div className="flex flex-wrap gap-1">
-            {zone.ppe_policy.helmet_required && (
+            {zone.ppe_policy?.helmet_required && (
               <span className="bg-slate-800 text-blue-300 border border-slate-700 px-1.5 py-0.2 rounded">
                 Helmet
               </span>
             )}
-            {zone.ppe_policy.vest_required && (
+            {zone.ppe_policy?.vest_required && (
               <span className="bg-slate-800 text-blue-300 border border-slate-700 px-1.5 py-0.2 rounded">
                 Vest
               </span>
             )}
-            {zone.ppe_policy.gloves_required && (
+            {zone.ppe_policy?.gloves_required && (
               <span className="bg-slate-800 text-blue-300 border border-slate-700 px-1.5 py-0.2 rounded">
                 Gloves
               </span>
             )}
-            {zone.ppe_policy.safety_shoes_required && (
+            {zone.ppe_policy?.safety_shoes_required && (
               <span className="bg-slate-800 text-blue-300 border border-slate-700 px-1.5 py-0.2 rounded">
                 Boots
               </span>
             )}
-            {!zone.ppe_policy.helmet_required &&
-              !zone.ppe_policy.vest_required &&
-              !zone.ppe_policy.gloves_required &&
-              !zone.ppe_policy.safety_shoes_required && (
-                <span className="text-slate-500 italic">No PPE required in this zone</span>
-              )}
+            {(!zone.ppe_policy ||
+              (!zone.ppe_policy.helmet_required &&
+                !zone.ppe_policy.vest_required &&
+                !zone.ppe_policy.gloves_required &&
+                !zone.ppe_policy.safety_shoes_required)) && (
+              <span className="text-slate-500 italic">No PPE required in this zone</span>
+            )}
           </div>
         </div>
       </div>

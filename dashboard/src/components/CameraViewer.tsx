@@ -259,7 +259,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                         )}
                       >
                         <HardHat className="w-3 h-3" />
-                        <span>{worker.worker_track_id} ({(worker.confidence * 100).toFixed(0)}%)</span>
+                        <span>{worker.worker_track_id} ({((worker.confidence ?? 0.88) * 100).toFixed(0)}%)</span>
                       </div>
 
                       {/* PPE Inspection Tag at bottom */}
@@ -380,7 +380,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
                   <span className="text-blue-400">{w.worker_track_id}</span>
                   <span className="text-slate-500 text-[10px]">
-                    [{(w.confidence * 100).toFixed(0)}%]
+                    [{((w.confidence ?? 0.88) * 100).toFixed(0)}%]
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">

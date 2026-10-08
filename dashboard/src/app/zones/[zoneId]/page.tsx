@@ -131,7 +131,7 @@ export default function ZoneDetailPage({ params }: { params: Promise<{ zoneId: s
               <div className="flex justify-between items-center p-2 rounded bg-[#1A222C] border border-slate-800">
                 <span className="text-slate-400">Reg 40003 (Smoke Index):</span>
                 <span className="font-bold text-amber-400 font-mono">
-                  {zone.sensor_smoke_index.toFixed(2)} (0.00-1.00)
+                  {(zone.sensor_smoke_index ?? 0).toFixed(2)} (0.00-1.00)
                 </span>
               </div>
 
