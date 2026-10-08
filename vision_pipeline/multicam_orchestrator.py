@@ -21,6 +21,7 @@ from stream_manager import ThreadedCameraStream
 from face_engine import WorkerFaceEngine
 from ppe_detector import WorkerPPEEvaluator
 from firestore_client import FirestoreSyncClient
+from web_streamer import WebStreamBroadcaster
 
 class MultiCameraOrchestrator:
     """
@@ -29,13 +30,13 @@ class MultiCameraOrchestrator:
     2. Ward / Work Area Camera (Elevated Wide-Angle): YOLOv8 tracking & event-driven PPE violation alerting.
     3. Cross-Angle Identity Resolution: Direct face matching with Gate Session Fallback.
     """
-    def __init__(self, gate_src="0", ward_src="0", facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False):
+    def __init__(self, gate_src="0", ward_src="0", cctv3_src=None, cctv4_src=None, facility_id=FACILITY_ID, zone_id=ZONE_ID, test_mode=False):
         self.facility_id = facility_id
         self.zone_id = zone_id
         self.test_mode = test_mode
 
         print("=" * 70)
-        print("  SAFETYINTEL ENTERPRISE DUAL-CAMERA ORCHESTRATOR")
+        print("  SAFETYINTEL ENTERPRISE MULTI-CCTV ORCHESTRATOR")
         print(f"  Facility: {self.facility_id} | Zone: {self.zone_id}")
         print("=" * 70)
 
@@ -66,6 +67,8 @@ class MultiCameraOrchestrator:
         print("[Stream Manager] Initializing decoupled camera threads...")
         self.gate_stream = ThreadedCameraStream(src=gate_src, camera_id="CAM_00_GATE", target_fps=20)
         self.ward_stream = ThreadedCameraStream(src=ward_src, camera_id="CAM_01_WARD", target_fps=25)
+        self.cctv3_stream = ThreadedCameraStream(src=cctv3_src, camera_id="CAM_03_SIDE_L", target_fps=20) if cctv3_src else None
+        self.cctv4_stream = ThreadedCameraStream(src=cctv4_src, camera_id="CAM_04_SIDE_R", target_fps=20) if cctv4_src else None
 
         # 6. Stateful Memory & Session Tables
         self.active_checked_in_workers: Dict[str, dict] = {}
@@ -82,6 +85,11 @@ class MultiCameraOrchestrator:
                 "timestamp": time.time(),
             }
             print(f"[Gate Session] Active baseline roster initialized with: {demo_name}")
+
+        # 7. Real-time MJPEG Web Stream Broadcaster (Sub-50ms HTTP Server for Web Dashboard)
+        self.web_broadcaster = WebStreamBroadcaster(host="0.0.0.0", port=5000)
+        if not self.test_mode:
+            self.web_broadcaster.start()
 
     def process_gate_stream(self, gate_frame: np.ndarray):
         """Processes choke-point gate camera for identity verification and access logging."""
@@ -106,7 +114,14 @@ class MultiCameraOrchestrator:
             face_crop = gate_frame[y1:y1 + head_h, x1:x2]
 
             name, score = self.face_engine.identify_face(face_crop)
-            if name and name not in ["Unidentified Worker", "Unregistered Worker"]:
+            is_verified = bool(name and name not in ["Unidentified Worker", "Unregistered Worker"])
+            box_col = (0, 230, 115) if is_verified else (0, 180, 255)
+            cv2.rectangle(gate_frame, (x1, y1), (x2, y2), box_col, 2)
+            cv2.rectangle(gate_frame, (x1, y1), (x2, y1 + head_h), (255, 200, 0), 1)
+            lbl = f"{name} ({score:.2f})" if is_verified else "Verifying Identity..."
+            cv2.putText(gate_frame, lbl, (x1 + 4, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_col, 1)
+
+            if is_verified:
                 checkin_time_str = datetime.now().strftime("%H:%M:%S")
                 if name not in self.active_checked_in_workers:
                     # Evaluate initial PPE
@@ -240,7 +255,7 @@ class MultiCameraOrchestrator:
         return "Worker ID Unknown (Facing away)", "Uncorrelated Work Area Track"
 
     def run(self):
-        """Main dual-stream execution loop."""
+        """Main multi-stream execution loop."""
         print("\n[Orchestrator Running] Ingesting Gate and Ward streams. Press 'q' to stop.")
         frame_idx = 0
         prev_time = time.time()
@@ -288,6 +303,20 @@ class MultiCameraOrchestrator:
 
             display_view = np.vstack([composite, footer])
 
+            # 5. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
+            if not self.test_mode:
+                self.web_broadcaster.update_frame("cctv1", gate_resized)
+                self.web_broadcaster.update_frame("cctv2", ward_resized)
+                self.web_broadcaster.update_frame("composite", display_view)
+                if self.cctv3_stream:
+                    f3, _ = self.cctv3_stream.get_latest_frame()
+                    if f3 is not None:
+                        self.web_broadcaster.update_frame("cctv3", f3)
+                if self.cctv4_stream:
+                    f4, _ = self.cctv4_stream.get_latest_frame()
+                    if f4 is not None:
+                        self.web_broadcaster.update_frame("cctv4", f4)
+
             # In test mode, exit after 40 frames without GUI rendering
             if self.test_mode:
                 if frame_idx >= 40:
@@ -303,7 +332,12 @@ class MultiCameraOrchestrator:
 
         self.gate_stream.stop()
         self.ward_stream.stop()
+        if self.cctv3_stream:
+            self.cctv3_stream.stop()
+        if self.cctv4_stream:
+            self.cctv4_stream.stop()
         if not self.test_mode:
+            self.web_broadcaster.stop()
             cv2.destroyAllWindows()
         print("[Orchestrator] Multi-CCTV pipeline stopped cleanly.")
 
@@ -319,6 +353,8 @@ def main():
     orchestrator = MultiCameraOrchestrator(
         gate_src=args.cctv1,
         ward_src=args.cctv2,
+        cctv3_src=args.cctv3,
+        cctv4_src=args.cctv4,
         test_mode=args.test_mode,
     )
     orchestrator.run()

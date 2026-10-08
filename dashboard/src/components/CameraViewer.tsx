@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Camera, WorkerTrack } from "@/types/safety";
 import { useSafety } from "@/context/SafetyContext";
 import { PPEChip } from "./PPEChip";
@@ -16,7 +16,16 @@ import {
   Pencil,
   Check,
   X,
+  RefreshCw,
+  Radio,
 } from "lucide-react";
+
+const FALLBACK_IMAGES: Record<string, string> = {
+  CCTV_01: "https://images.unsplash.com/photo-1541888946425-d0fbb186c5f8?auto=format&fit=crop&w=1200&q=80",
+  CCTV_02: "https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?auto=format&fit=crop&w=1200&q=80",
+  CCTV_03: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=1200&q=80",
+  CCTV_04: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80",
+};
 
 interface CameraViewerProps {
   camera: Camera;
@@ -41,6 +50,21 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(camera.name);
   const [isSaving, setIsSaving] = useState(false);
+  const [streamError, setStreamError] = useState(false);
+  const [showFallbackSim, setShowFallbackSim] = useState(false);
+  const [streamKey, setStreamKey] = useState(0);
+
+  const resolvedStreamUrl = useMemo(() => {
+    const rawUrl = camera.stream_url || FALLBACK_IMAGES[camera.camera_id] || "";
+    if (showFallbackSim) {
+      return FALLBACK_IMAGES[camera.camera_id] || FALLBACK_IMAGES.CCTV_02;
+    }
+    if (typeof window !== "undefined" && rawUrl.includes("localhost:5000")) {
+      const hostname = window.location.hostname || "localhost";
+      return rawUrl.replace("localhost", hostname);
+    }
+    return rawUrl;
+  }, [camera.stream_url, camera.camera_id, showFallbackSim]);
 
   const handleSaveName = async () => {
     if (!editedName.trim()) return;
@@ -160,9 +184,16 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             {/* Background Stream Feed Image */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={camera.stream_url}
+              key={`${resolvedStreamUrl}-${streamKey}`}
+              src={resolvedStreamUrl}
               alt={camera.name}
               className="w-full h-full object-cover select-none"
+              onLoad={() => setStreamError(false)}
+              onError={() => {
+                if (!showFallbackSim) {
+                  setStreamError(true);
+                }
+              }}
             />
 
             {/* AI Bounding Boxes & Tracking Layer */}
@@ -250,14 +281,71 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 })}
               </div>
             )}
+
+            {/* Live Indicator overlay watermark */}
+            {!streamError && !showFallbackSim && (
+              <div className="absolute top-2 left-2 bg-black/80 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded text-[10px] flex items-center gap-1.5 font-bold shadow pointer-events-none">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>LIVE MJPEG (30 FPS) • {zoneName}</span>
+              </div>
+            )}
+
+            {/* Fallback Simulation Badge */}
+            {showFallbackSim && (
+              <div className="absolute top-2 left-2 bg-amber-950/90 text-amber-200 border border-amber-500/40 px-2 py-0.5 rounded text-[10px] flex items-center gap-1.5 font-bold shadow">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span>DEMO SIMULATION FEED</span>
+                <button
+                  onClick={() => {
+                    setShowFallbackSim(false);
+                    setStreamError(false);
+                    setStreamKey((k) => k + 1);
+                  }}
+                  className="ml-1 text-[9px] bg-amber-800/60 hover:bg-amber-700 text-white px-1 py-0.2 rounded transition-colors"
+                >
+                  Switch to Live
+                </button>
+              </div>
+            )}
+
+            {/* Standby / Error Overlay when Python Stream is not broadcasting yet */}
+            {streamError && !showFallbackSim && (
+              <div className="absolute inset-0 bg-[#0B0F17]/95 flex flex-col items-center justify-center p-4 text-center space-y-2 z-10">
+                <div className="w-9 h-9 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Video className="w-4 h-4 animate-pulse" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-200 tracking-wider">
+                    STREAM STANDBY — PORT 5000
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5 max-w-xs">
+                    Start the Python vision orchestrator to broadcast this camera feed.
+                  </p>
+                </div>
+                <div className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1 font-mono text-[10px] text-emerald-400 select-all max-w-sm truncate">
+                  python vision_pipeline/multicam_orchestrator.py
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      setStreamError(false);
+                      setStreamKey((k) => k + 1);
+                    }}
+                    className="px-2.5 py-1 text-[11px] bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition-colors flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Retry Stream
+                  </button>
+                  <button
+                    onClick={() => setShowFallbackSim(true)}
+                    className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium transition-colors border border-slate-700"
+                  >
+                    Show Demo Feed
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
-
-        {/* Live Indicator overlay watermark */}
-        <div className="absolute top-2 left-2 bg-black/70 text-slate-300 px-2 py-0.5 rounded text-[10px] flex items-center gap-1.5 font-bold">
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-          <span>LIVE RTSP PUSH • {zoneName}</span>
-        </div>
       </div>
 
       {/* Tracked Personnel Footer Panel */}
