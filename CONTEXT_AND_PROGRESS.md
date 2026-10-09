@@ -383,6 +383,16 @@
     1. Add `MACRO72` as a collaborator in `inferno-bissh/ps06_safety_gear` settings.
     2. Force login as `inferno-bissh` via `git remote set-url origin https://inferno-bissh@github.com/inferno-bissh/ps06_safety_gear.git`.
     3. Point origin to `MACRO72/ps06_safety_gear.git` if pushing directly to MACRO72's account.
+### Session: 2026-10-10 (Session 23)
+- **Agent Focus:** Erase Stale Windows Git Credentials & Target Authentication to `inferno-bissh`.
+- **Key Findings & Accomplishments:**
+  - **Erased Stored Credentials:**
+    - Ran `cmdkey /delete:git:https://github.com` and flushed Git's credential store via `git credential reject`.
+    - Verified that no stale GitHub authentication entries remain in Windows Credential Manager.
+  - **Reconfigured Git Remote with Explicit Identity:**
+    - Updated remote origin URL to: `https://inferno-bissh@github.com/inferno-bissh/ps06_safety_gear.git`.
+  - **Ready for Authentication Prompt:**
+    - Executing `git push -u origin main` in the user terminal will now prompt Git Credential Manager to sign in as `inferno-bissh` (browser popup or PAT input).
 - **Files Modified:**
   - Modified: [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/VICTUS/OneDrive/Desktop/Documents/BPUT%20HACKATHON/ps06_industry_safety/CONTEXT_AND_PROGRESS.md)
 
@@ -390,7 +400,7 @@
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **GitHub Push Completion:** Resolve `MACRO72` access or push with `inferno-bissh` credentials.
+1. **Complete Authentication Prompt:** Run `git push -u origin main` in the interactive terminal and sign in as `inferno-bissh` when prompted.
 2. **Verify Camera Updates in Browser:** Open [http://localhost:3000/](http://localhost:3000/) or [http://localhost:3000/cameras](http://localhost:3000/cameras).
 
 
