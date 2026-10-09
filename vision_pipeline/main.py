@@ -14,6 +14,7 @@ from config import (
     FRAME_WIDTH,
     FRAME_HEIGHT,
     TEMPORAL_CONFIRMATION_FRAMES,
+    PERSON_CONF_THRESHOLD,
 )
 from firestore_client import FirestoreSyncClient
 from ppe_detector import WorkerPPEEvaluator
@@ -165,24 +166,32 @@ def main():
         h, w = frame.shape[:2]
 
         # Run YOLO Object Detection & Tracking (Class 0 = Person) with ByteTrack for stable IDs
-        results = model.track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=0.55, verbose=False)
+        results = model.track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=PERSON_CONF_THRESHOLD, verbose=False)
 
         worker_count = 0
         boxes = []
         track_ids = []
 
-        if results and results[0].boxes and results[0].boxes.id is not None:
+        if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-            track_ids = results[0].boxes.id.cpu().numpy().astype(int)
             confidences = results[0].boxes.conf.cpu().numpy()
+            if results[0].boxes.id is not None:
+                track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+            else:
+                track_ids = [i + 1 for i in range(len(boxes))]
             worker_count = len(boxes)
+
+            # Pre-compute dedicated neural PPE detections across the entire frame
+            frame_ppe_items = ppe_evaluator.detect_frame_ppe(frame)
 
             for i, (box, track_id, conf) in enumerate(zip(boxes, track_ids, confidences)):
                 x1, y1, x2, y2 = box
                 str_track_id = f"TRACK_{track_id:02d}"
 
-                # Evaluate Worker PPE Compliance
-                ppe_result = ppe_evaluator.evaluate_ppe(frame, (x1, y1, x2, y2), str_track_id)
+                # Evaluate Worker PPE Compliance using hybrid neural + HSV fusion
+                ppe_result = ppe_evaluator.evaluate_ppe(
+                    frame, (x1, y1, x2, y2), str_track_id, frame_ppe_items=frame_ppe_items
+                )
 
                 is_compliant = ppe_result["is_compliant"]
                 helmet = ppe_result["helmet"]

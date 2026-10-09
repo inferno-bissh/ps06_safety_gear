@@ -16,6 +16,7 @@ from config import (
     CAMERA_ID,
     CAMERA_SOURCE,
     FIREBASE_PROJECT_ID,
+    PERSON_CONF_THRESHOLD,
 )
 from stream_manager import ThreadedCameraStream
 from face_engine import WorkerFaceEngine
@@ -110,10 +111,13 @@ class MultiCameraOrchestrator:
             return []
         self.last_gate_eval_time = now
 
-        # Run person detection
-        results = self.model(gate_frame, classes=[0], verbose=False, conf=0.45)
+        # Run person detection with optimized confidence threshold
+        results = self.model(gate_frame, classes=[0], verbose=False, conf=PERSON_CONF_THRESHOLD)
         if not results or len(results[0].boxes) == 0:
             return []
+
+        # Run dedicated neural YOLO PPE detection once for the gate frame
+        ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(gate_frame)
 
         gate_workers = []
         gh, gw = gate_frame.shape[:2]
@@ -128,13 +132,17 @@ class MultiCameraOrchestrator:
             is_verified = bool(name and name not in ["Unidentified Worker", "Unregistered Worker"])
             worker_id = name if is_verified else f"GATE_WORKER_{idx + 1}"
 
-            # Evaluate PPE for every detected person on Gate Camera!
-            ppe_res = self.gate_ppe_evaluator.evaluate_ppe(gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}")
+            # Evaluate PPE for every detected person on Gate Camera with neural + HSV fusion!
+            ppe_res = self.gate_ppe_evaluator.evaluate_ppe(
+                gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}", frame_ppe_items=ppe_items
+            )
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
             h_col = ppe_res.get("helmet_color", "NONE")
             v_col = ppe_res.get("vest_color", "NONE")
+            h_src = ppe_res.get("helmet_source", "NONE")
+            v_src = ppe_res.get("vest_source", "NONE")
 
             # Draw visual overlay on Gate frame
             box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
@@ -164,8 +172,8 @@ class MultiCameraOrchestrator:
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
-                    "gloves": "PASS",
-                    "safety_shoes": "PASS",
+                    "gloves": ppe_res.get("gloves", "PASS"),
+                    "safety_shoes": ppe_res.get("safety_shoes", "PASS"),
                 },
                 "bbox": {
                     "x": float(round((x1 / gw) * 100, 1)),
@@ -208,10 +216,15 @@ class MultiCameraOrchestrator:
         if ward_frame is None or ward_frame.size == 0:
             return []
 
-        # Track persons with ByteTrack
-        results = self.model.track(ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=0.45, verbose=False)
+        # Track persons with ByteTrack with optimized confidence threshold
+        results = self.model.track(
+            ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=PERSON_CONF_THRESHOLD, verbose=False
+        )
         if not results or len(results[0].boxes) == 0:
             return []
+
+        # Run dedicated neural YOLO PPE detection once for the ward frame
+        ppe_items = self.ward_ppe_evaluator.detect_frame_ppe(ward_frame)
 
         boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
         confidences = results[0].boxes.conf.cpu().numpy()
@@ -227,8 +240,10 @@ class MultiCameraOrchestrator:
             x1, y1, x2, y2 = box
             str_tid = f"TRACK_{track_id:02d}"
 
-            # Evaluate PPE compliance
-            ppe_res = self.ward_ppe_evaluator.evaluate_ppe(ward_frame, (x1, y1, x2, y2), str_tid)
+            # Evaluate PPE compliance with neural + HSV fusion!
+            ppe_res = self.ward_ppe_evaluator.evaluate_ppe(
+                ward_frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items
+            )
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]

@@ -40,9 +40,14 @@ CAMERA_ID = "CAM_01"
 TEMPORAL_CONFIRMATION_FRAMES = 25
 
 # Confidence Thresholds
-PERSON_CONF_THRESHOLD = 0.50
-HELMET_CONF_THRESHOLD = 0.60
+PERSON_CONF_THRESHOLD = 0.35
+HELMET_CONF_THRESHOLD = 0.25
+PPE_CONF_THRESHOLD = 0.25
 FIRE_CONF_THRESHOLD = 0.70
+
+# Neural Model Weights
+PPE_MODEL_PATH = BASE_DIR / "yolov8n_ppe.pt"
+YOLO_MODEL_PATH = PROJECT_ROOT / "yolov8n.pt"
 
 # Webcam input (0 for default laptop camera, or path to video file)
 CAMERA_SOURCE = 0

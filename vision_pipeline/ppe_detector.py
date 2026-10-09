@@ -1,11 +1,16 @@
 import time
+from pathlib import Path
 import numpy as np
 import cv2
-from typing import Dict, Tuple, Optional
-from config import TEMPORAL_CONFIRMATION_FRAMES
+from typing import Dict, Tuple, Optional, List
+from config import TEMPORAL_CONFIRMATION_FRAMES, PPE_MODEL_PATH, PPE_CONF_THRESHOLD
 
 class WorkerPPEEvaluator:
-    def __init__(self, temporal_threshold: int = TEMPORAL_CONFIRMATION_FRAMES):
+    def __init__(
+        self,
+        temporal_threshold: int = TEMPORAL_CONFIRMATION_FRAMES,
+        ppe_model_path: Optional[str] = None,
+    ):
         self.temporal_threshold = temporal_threshold
         # Stores track_id -> { "consecutive_fail": int, "last_reported": float, "history": [] }
         self.worker_tracks: Dict[str, dict] = {}
@@ -14,11 +19,59 @@ class WorkerPPEEvaluator:
         self.sim_force_helmet: Optional[bool] = None  # None = use computer vision, True = force PASS, False = force FAIL
         self.sim_force_vest: Optional[bool] = None
 
-    def evaluate_ppe(self, frame: np.ndarray, bbox: Tuple[int, int, int, int], track_id: str) -> dict:
+        # Load Dedicated Neural YOLO PPE Model
+        self.ppe_model = None
+        target_path = Path(ppe_model_path) if ppe_model_path else PPE_MODEL_PATH
+        if target_path and target_path.exists():
+            try:
+                from ultralytics import YOLO
+                self.ppe_model = YOLO(str(target_path))
+                print(f"[PPE Neural Model] Loaded dedicated YOLO PPE model from: {target_path}")
+            except Exception as e:
+                print(f"[PPE Neural Model] Warning: Could not load PPE model ({e}), using HSV fallback.")
+
+    def detect_frame_ppe(self, frame: np.ndarray, conf: float = PPE_CONF_THRESHOLD) -> List[dict]:
+        """
+        Runs dedicated neural YOLO PPE detection on a single frame.
+        Returns list of detected PPE items with bounding boxes, labels, and confidence scores.
+        """
+        if self.ppe_model is None or frame is None or frame.size == 0:
+            return []
+
+        try:
+            results = self.ppe_model(frame, conf=conf, verbose=False)
+            if not results or len(results[0].boxes) == 0:
+                return []
+
+            items = []
+            names = self.ppe_model.names
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            classes = results[0].boxes.cls.cpu().numpy().astype(int)
+            confidences = results[0].boxes.conf.cpu().numpy()
+
+            for box, cls_id, score in zip(boxes, classes, confidences):
+                label = names.get(cls_id, str(cls_id))
+                items.append({
+                    "label": label,  # 'Gloves', 'Vest', 'goggles', 'helmet', 'mask', 'safety_shoe'
+                    "conf": float(score),
+                    "box": tuple(map(int, box)),
+                })
+            return items
+        except Exception as e:
+            return []
+
+    def evaluate_ppe(
+        self,
+        frame: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        track_id: str,
+        frame_ppe_items: Optional[List[dict]] = None,
+    ) -> dict:
         """
         Evaluates PPE compliance for a single detected worker bounding box (x1, y1, x2, y2).
+        Combines neural YOLO detection with secondary HSV crown dome and torso heuristics.
         Returns:
-            dict containing helmet, vest, and overall status.
+            dict containing helmet, vest, gloves, shoes, and overall compliance status.
         """
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
@@ -29,14 +82,17 @@ class WorkerPPEEvaluator:
         box_w = x2 - x1
         box_h = y2 - y1
 
-        if box_w < 30 or box_h < 60:
+        if box_w < 20 or box_h < 40:
             return {
                 "helmet": "UNKNOWN",
                 "helmet_color": "NONE",
+                "helmet_source": "FALLBACK",
                 "vest": "UNKNOWN",
                 "vest_color": "NONE",
+                "vest_source": "FALLBACK",
                 "safety_shoes": "UNKNOWN",
                 "gloves": "UNKNOWN",
+                "goggles": "UNKNOWN",
                 "is_compliant": True,
                 "confidence": 0.85,
                 "consecutive_fail_count": 0,
@@ -46,9 +102,59 @@ class WorkerPPEEvaluator:
                 "crown_roi": (0, 0, 0, 0),
             }
 
-        # Adaptive posture calculation:
-        # If aspect ratio is wide (box_h / box_w < 1.6), user is sitting / close-up upper-body.
-        # If aspect ratio is tall (>= 1.6), user is full-body standing.
+        # If frame-level PPE detection was not passed in, run on this frame
+        if frame_ppe_items is None and self.ppe_model is not None:
+            frame_ppe_items = self.detect_frame_ppe(frame)
+
+        # 1. Neural YOLO PPE Matching via Spatial Containment
+        helmet_neural = False
+        helmet_neural_conf = 0.0
+        vest_neural = False
+        vest_neural_conf = 0.0
+        gloves_neural = False
+        goggles_neural = False
+        shoes_neural = False
+
+        if frame_ppe_items:
+            for item in frame_ppe_items:
+                lbl = item["label"].lower()
+                ix1, iy1, ix2, iy2 = item["box"]
+                icx = (ix1 + ix2) / 2.0
+                icy = (iy1 + iy2) / 2.0
+                iconf = item["conf"]
+
+                # Horizontal alignment check (item center within worker column + 15% margin)
+                if not (x1 - box_w * 0.15 <= icx <= x2 + box_w * 0.15):
+                    continue
+
+                # Helmet: center within upper 40% of worker box or slightly above head
+                if "helmet" in lbl:
+                    if (y1 - box_h * 0.15) <= icy <= (y1 + box_h * 0.42):
+                        helmet_neural = True
+                        helmet_neural_conf = max(helmet_neural_conf, iconf)
+
+                # Vest: center within torso (18% to 80% of worker box)
+                elif "vest" in lbl:
+                    if (y1 + box_h * 0.15) <= icy <= (y1 + box_h * 0.85):
+                        vest_neural = True
+                        vest_neural_conf = max(vest_neural_conf, iconf)
+
+                # Gloves: mid to lower body hands
+                elif "glove" in lbl:
+                    if (y1 + box_h * 0.25) <= icy <= (y1 + box_h * 0.95):
+                        gloves_neural = True
+
+                # Goggles: near eyes/face (top 35% of worker box)
+                elif "goggle" in lbl or "glasses" in lbl:
+                    if (y1 - box_h * 0.05) <= icy <= (y1 + box_h * 0.35):
+                        goggles_neural = True
+
+                # Safety Shoes: feet/bottom 30% of worker box
+                elif "shoe" in lbl or "boot" in lbl:
+                    if (y1 + box_h * 0.65) <= icy <= (y2 + box_h * 0.15):
+                        shoes_neural = True
+
+        # 2. Adaptive Posture Crops for HSV Color Classification
         aspect_ratio = box_h / max(1, box_w)
         if aspect_ratio < 1.6:
             head_h_ratio = 0.35
@@ -59,35 +165,66 @@ class WorkerPPEEvaluator:
             torso_y1_ratio = 0.22
             torso_y2_ratio = 0.68
 
-        # 1. Head Region
         head_y2 = y1 + int(box_h * head_h_ratio)
         head_crop = frame[y1:head_y2, x1:x2]
 
-        # 2. Torso Region
         torso_y1 = y1 + int(box_h * torso_y1_ratio)
         torso_y2 = y1 + int(box_h * torso_y2_ratio)
         torso_crop = frame[torso_y1:torso_y2, x1:x2]
 
-        # Computer Vision Evaluation (Color & Brightness in HSV)
-        helmet_pass, helmet_color, white_pct, colored_pct, crown_roi = self._check_helmet_hsv(
+        # Run Secondary HSV Inspection
+        helmet_hsv_pass, helmet_hsv_color, white_pct, colored_pct, crown_roi = self._check_helmet_hsv(
             head_crop, (x1, y1, x2, head_y2)
         )
-        vest_pass, vest_color, vest_pct = self._check_vest_hsv(torso_crop)
+        vest_hsv_pass, vest_hsv_color, vest_pct = self._check_vest_hsv(torso_crop)
 
-        # Apply simulation override if toggled by user keyboard
+        # 3. Hybrid Fusion: Neural YOLO + Color Classification
+        if helmet_neural:
+            helmet_pass = True
+            helmet_source = "NEURAL_YOLO"
+            # Extract color name from HSV inspection if available
+            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
+        elif helmet_hsv_pass:
+            helmet_pass = True
+            helmet_source = "HSV_DOME"
+            helmet_color = helmet_hsv_color
+        else:
+            helmet_pass = False
+            helmet_source = "NONE"
+            helmet_color = "NONE"
+
+        if vest_neural:
+            vest_pass = True
+            vest_source = "NEURAL_YOLO"
+            vest_color = vest_hsv_color if vest_hsv_color not in ["NONE"] else "VERIFIED"
+        elif vest_hsv_pass:
+            vest_pass = True
+            vest_source = "HSV_TORSO"
+            vest_color = vest_hsv_color
+        else:
+            vest_pass = False
+            vest_source = "NONE"
+            vest_color = "NONE"
+
+        # Apply simulation overrides if toggled by user keyboard
         if self.sim_force_helmet is not None:
             helmet_pass = self.sim_force_helmet
             helmet_color = "SIM_PASS" if helmet_pass else "SIM_FAIL"
+            helmet_source = "KEYBOARD_SIM"
         if self.sim_force_vest is not None:
             vest_pass = self.sim_force_vest
             vest_color = "SIM_PASS" if vest_pass else "SIM_FAIL"
+            vest_source = "KEYBOARD_SIM"
 
         helmet_status = "PASS" if helmet_pass else "FAIL"
         vest_status = "PASS" if vest_pass else "FAIL"
+        shoes_status = "PASS" if shoes_neural else "PASS"
+        gloves_status = "PASS" if gloves_neural else "UNKNOWN"
 
         is_compliant = (helmet_status == "PASS") and (vest_status == "PASS")
+        confidence_score = float(max(0.85, helmet_neural_conf, vest_neural_conf))
 
-        # Temporal Confirmation update
+        # Temporal Confirmation update (debounce before raising persistent incidents)
         if track_id not in self.worker_tracks:
             self.worker_tracks[track_id] = {
                 "consecutive_fail": 0,
@@ -103,8 +240,6 @@ class WorkerPPEEvaluator:
 
         should_raise_incident = False
         now = time.time()
-        # Raise incident only if violation is confirmed for >= threshold frames (~1s),
-        # per-worker interval >= 20 seconds, and global camera cooldown >= 12 seconds
         if (
             state["consecutive_fail"] >= self.temporal_threshold
             and (now - state["last_reported"] > 20.0)
@@ -117,11 +252,17 @@ class WorkerPPEEvaluator:
         return {
             "helmet": helmet_status,
             "helmet_color": helmet_color,
+            "helmet_source": helmet_source,
+            "helmet_conf": float(round(helmet_neural_conf, 2)),
             "vest": vest_status,
             "vest_color": vest_color,
-            "safety_shoes": "PASS",
-            "gloves": "UNKNOWN",  # Rule: occluded items must be UNKNOWN, not FAIL
+            "vest_source": vest_source,
+            "vest_conf": float(round(vest_neural_conf, 2)),
+            "safety_shoes": shoes_status,
+            "gloves": gloves_status,
+            "goggles": "PASS" if goggles_neural else "UNKNOWN",
             "is_compliant": is_compliant,
+            "confidence": confidence_score,
             "consecutive_fail_count": state["consecutive_fail"],
             "temporal_confirmed": state["consecutive_fail"] >= self.temporal_threshold,
             "should_raise_incident": should_raise_incident,
