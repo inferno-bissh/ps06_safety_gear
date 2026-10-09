@@ -427,11 +427,25 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 26)
+- **Agent Focus:** NPM Execution Resolution, Root `package.json` Orchestration, and Active Port 3000 Clean-up.
+- **Key Decisions & Accomplishments:**
+  - **Identified Root Causes of "NPM wasn't working / showing errors":**
+    1. **Pre-Existing Terminal Session PATH Cache:** In Windows, terminals opened prior to Node.js installation hold a stale environment copy where `npm` is unrecognized.
+    2. **Execution Directory Mismatch (`ENOENT`):** Running `npm run dev` from the repository root (`c:\Users\dehur\ps_06\`) failed because `package.json` only existed in `dashboard/`.
+  - **Implemented Engineering Fixes:**
+    - Created root [`package.json`](file:///c:/Users/dehur/ps_06/package.json) forwarding `dev`, `build`, `start`, and `lint` scripts to `dashboard/` via `--prefix dashboard`.
+    - Users can now execute `npm run dev` directly from the project root (`c:\Users\dehur\ps_06\`) or from `dashboard/` without directory errors.
+    - Verified dev server startup on port 3000 (`Ready in 591ms`), tested HTTP response (83KB full dashboard HTML delivered), and released port 3000 cleanly for user terminal execution.
+- **Files Created/Modified:**
+  - Created: [`package.json`](file:///c:/Users/dehur/ps_06/package.json)
+  - Modified: [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Launch Operations Console:** Run `npm run dev` in `dashboard/` ➔ [http://localhost:3000](http://localhost:3000).
+1. **Launch Operations Console:** Open a fresh terminal tab and run `npm run dev` directly from `c:\Users\dehur\ps_06\` ➔ [http://localhost:3000](http://localhost:3000).
 2. **Launch Live Multi-CCTV Orchestrator:**
    - Laptop Webcam only: `python vision_pipeline/multicam_orchestrator.py --no-gui`
    - Laptop Webcam (CCTV 1) + Phone IP Camera (CCTV 2): `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front http://<PHONE_IP>:8080/video --no-gui`
