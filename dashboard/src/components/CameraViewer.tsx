@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Camera, WorkerTrack } from "@/types/safety";
 import { useSafety } from "@/context/SafetyContext";
 import { PPEChip } from "./PPEChip";
@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Radio,
   Plus,
+  Play,
 } from "lucide-react";
 
 const FALLBACK_IMAGES: Record<string, string> = {
@@ -57,6 +58,8 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [showFallbackSim, setShowFallbackSim] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
 
+  const [isStartingEngine, setIsStartingEngine] = useState(false);
+
   const defaultStreamEndpoint = useMemo(() => {
     const camId = (camera.camera_id || "").toLowerCase();
     if (camId.includes("1") || camId.includes("gate")) return "http://localhost:5000/video/cctv1";
@@ -70,10 +73,11 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     if (showFallbackSim) {
       return FALLBACK_IMAGES[camera.camera_id] || FALLBACK_IMAGES.CCTV_02;
     }
-    let target = camera.stream_url;
-    // If stream_url is unset or still pointing to legacy static Unsplash placeholders, use the live Python stream!
-    if (!target || target.includes("unsplash.com")) {
-      target = defaultStreamEndpoint;
+    // All local & IP cameras route through our sub-50ms Python AI Vision pipeline on port 5000
+    let target = defaultStreamEndpoint;
+    // If the stream_url already explicitly specifies an HTTP endpoint on port 5000, keep it
+    if (camera.stream_url && camera.stream_url.includes(":5000")) {
+      target = camera.stream_url;
     }
     if (typeof window !== "undefined" && target.includes("localhost:5000")) {
       const hostname = window.location.hostname || "localhost";
@@ -81,6 +85,62 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     }
     return target;
   }, [camera.stream_url, camera.camera_id, showFallbackSim, defaultStreamEndpoint]);
+
+  // When camera stream URL or status updates (e.g. user clicked Save & Connect in modal), reset error & reconnect
+  useEffect(() => {
+    setStreamError(false);
+    setShowFallbackSim(false);
+    setStreamKey((k) => k + 1);
+  }, [camera.stream_url, camera.status, camera.camera_id]);
+
+  // Automatic reconnection poll: while stream is in error/standby, periodically check if port 5000 is active
+  useEffect(() => {
+    if (!streamError || showFallbackSim) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/cameras/start-stream", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isMounted && data.online) {
+          setStreamError(false);
+          setStreamKey((k) => k + 1);
+        }
+      } catch {
+        // Still connecting, keep waiting
+      }
+    }, 1500);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [streamError, showFallbackSim]);
+
+  const handleStartEngine = async () => {
+    setIsStartingEngine(true);
+    try {
+      const isCctv1 = (camera.camera_id || "").toLowerCase().includes("1");
+      const cctv1 = isCctv1 ? (camera.stream_url || "0") : "0";
+      const cctv2 = !isCctv1 ? (camera.stream_url || "http://192.168.1.5:8080/video") : "http://192.168.1.5:8080/video";
+
+      await fetch("/api/cameras/start-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cctv1, cctv2, forceRestart: true }),
+      });
+      // Wait for port 5000 to be ready then refresh
+      setTimeout(() => {
+        setStreamError(false);
+        setStreamKey((k) => k + 1);
+      }, 2000);
+    } catch (e) {
+      console.error("Failed to start AI Vision engine:", e);
+    } finally {
+      setIsStartingEngine(false);
+    }
+  };
 
   const handleSaveName = async () => {
     if (!editedName.trim()) return;
@@ -223,10 +283,40 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       {/* Video Canvas Container */}
       <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
         {isOffline ? (
-          <div className="text-center p-6 space-y-2">
+          <div className="text-center p-6 space-y-2.5">
             <WifiOff className="w-10 h-10 text-slate-600 mx-auto animate-pulse" />
             <div className="text-sm font-bold text-slate-400">CAMERA STREAM OFFLINE</div>
-            <p className="text-xs text-slate-500">Attempting automatic cloud reconnection...</p>
+            <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              Camera is currently offline. Connect an IP stream or start the AI Vision Engine.
+            </p>
+            <div className="flex items-center gap-2 pt-1 justify-center flex-wrap">
+              {onConnectIp && (
+                <button
+                  onClick={() => onConnectIp(camera)}
+                  className="px-2.5 py-1 text-[11px] bg-blue-600 hover:bg-blue-500 text-white rounded font-bold transition-colors flex items-center gap-1 shadow-sm shadow-blue-500/20"
+                >
+                  <Plus className="w-3 h-3 stroke-[2.5]" /> Connect IP Stream
+                </button>
+              )}
+              <button
+                onClick={handleStartEngine}
+                disabled={isStartingEngine}
+                className="px-2.5 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded font-medium transition-colors flex items-center gap-1"
+              >
+                {isStartingEngine ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Play className="w-3 h-3 fill-current" />
+                )}
+                <span>Start AI Engine</span>
+              </button>
+              <button
+                onClick={() => setShowFallbackSim(true)}
+                className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium transition-colors border border-slate-700"
+              >
+                Demo Feed
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -375,10 +465,25 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                   python vision_pipeline/multicam_orchestrator.py
                 </div>
                 <div className="flex items-center gap-2 pt-1 flex-wrap justify-center">
+                  <button
+                    onClick={handleStartEngine}
+                    disabled={isStartingEngine}
+                    className="px-2.5 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded font-bold transition-colors flex items-center gap-1 shadow-sm shadow-emerald-500/20"
+                  >
+                    {isStartingEngine ? (
+                      <>
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Starting AI Engine...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3 h-3 fill-current" /> Start AI Vision Engine
+                      </>
+                    )}
+                  </button>
                   {onConnectIp && (
                     <button
                       onClick={() => onConnectIp(camera)}
-                      className="px-2.5 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium transition-colors flex items-center gap-1 shadow-sm shadow-emerald-500/20"
+                      className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-medium transition-colors flex items-center gap-1 border border-slate-700"
                     >
                       <Plus className="w-3 h-3 stroke-[2.5]" /> Connect IP Stream
                     </button>

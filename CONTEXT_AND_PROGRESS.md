@@ -441,14 +441,41 @@
   - Created: [`package.json`](file:///c:/Users/dehur/ps_06/package.json)
   - Modified: [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 27)
+- **Agent Focus:** Camera Connect & Stream Rendering Fix for CCTV 1 (Laptop Webcam) and CCTV 2 (Phone Camera).
+- **Key Decisions & Accomplishments:**
+  - **Diagnosed Root Causes for Black / Standby Feeds on "Save & Connect":**
+    1. **Non-URL Fallback Bug in `CameraViewer.tsx`:** When CCTV 1 was configured as hardware index `"0"`, `resolvedStreamUrl` previously evaluated to `"0"` rather than routing to `http://localhost:5000/video/cctv1`. Browsers attempting to load `<img src="0">` threw 404 network errors, triggering `onError` and trapping the component in standby.
+    2. **Direct Phone IP Stream Bypass Bug:** When CCTV 2 was saved with a phone IP (e.g. `http://192.168.1.5:8080/video`), `CameraViewer` was loading the raw phone IP directly in the browser `<img src="...">`, completely bypassing the Python AI vision pipeline. Because phone IP webcams (like IP Webcam on Android) frequently reject multiple concurrent connections or suffer CORS/mixed-content blocks, the stream failed, and even if it loaded it lacked AI detection bounding boxes. Fixed by routing all orchestrated feeds to `http://localhost:5000/video/cctv1` and `cctv2`.
+    3. **No State Reset Upon Modal Save:** When `CameraViewer` mounted before the Python backend started, `streamError` became `true`. When the user configured the camera in `ConnectCameraModal` and clicked "Save & Connect", the modal closed, but `CameraViewer` never reset `streamError` because it had no `useEffect` listening to config changes.
+    4. **No Auto-Reconnect Loop:** Python takes 3-4s to load YOLO weights on startup. The initial connection attempt immediately failed and trapped the UI in standby indefinitely with no retry.
+  - **Implemented Engineering Fixes:**
+    - **Auto-Reset on Config Change:** Added a reactive `useEffect` in [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx) listening to `[camera.stream_url, camera.status, camera.camera_id]`. Saving from the modal automatically clears `streamError`, dismisses simulation fallback, and bumps `streamKey` to immediately reload the stream.
+    - **Automatic Liveness Polling:** Added an auto-reconnect `useEffect` in `CameraViewer.tsx` that polls `/api/cameras/start-stream` every 1.5s while in standby. As soon as port 5000 is active, the stream connects automatically without requiring manual user clicks.
+    - **One-Click "Start AI Vision Engine" UI:** Added interactive `"▶ Start AI Vision Engine"` buttons to both the Standby overlay and Offline cards in `CameraViewer.tsx`.
+    - **Auto-Start Stream API (`POST /api/cameras/start-stream`):** Created and enhanced [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts). Detects project root robustly, supports `forceRestart: true` by cleanly terminating prior orchestrator processes before spawning new ones, and monitors port 5000 liveness.
+    - **Modal Integration in `ConnectCameraModal.tsx`:** Updated `handleSaveAndConnect()` to automatically trigger `/api/cameras/start-stream` with `forceRestart: true` so camera stream changes immediately re-bind in Python.
+  - **Verification:**
+    - Tested `/api/cameras/start-stream` and `/api/cameras/workers`: Returned `online: True`, live worker tracking with YOLOv8 bounding boxes, and PPE telemetry.
+    - Both `cctv1` (`http://localhost:5000/video/cctv1`) and `cctv2` (`http://localhost:5000/video/cctv2`) verified actively streaming `multipart/x-mixed-replace` JPEG frames.
+    - Ran `npx tsc --noEmit` ➔ 0 type errors.
+    - Ran `npm run build` ➔ Optimized Next.js production build succeeded in 3.2s with all 14 routes compiled.
+- **Files Created/Modified:**
+  - Created: [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts)
+  - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Launch Operations Console:** Open a fresh terminal tab and run `npm run dev` directly from `c:\Users\dehur\ps_06\` ➔ [http://localhost:3000](http://localhost:3000).
-2. **Launch Live Multi-CCTV Orchestrator:**
-   - Laptop Webcam only: `python vision_pipeline/multicam_orchestrator.py --no-gui`
-   - Laptop Webcam (CCTV 1) + Phone IP Camera (CCTV 2): `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front http://<PHONE_IP>:8080/video --no-gui`
+1. **Dashboard URL:** [http://localhost:3000](http://localhost:3000) (Overview) and [http://localhost:3000/cameras](http://localhost:3000/cameras) (Full Multi-Camera Wall).
+2. **Connecting Cameras via UI:**
+   - Click **"Connect IP Camera"** or click on any camera card.
+   - For **CCTV 1 (Laptop Camera)**: Click the **"Laptop Webcam (0)"** preset button or enter `0`, then click **"Save & Connect Camera"**.
+   - For **CCTV 2 (Phone Camera)**: Enter your phone's IP address (e.g. `192.168.1.5` or `http://192.168.1.5:8080/video`), click **"Test Link"**, then click **"Save & Connect Camera"**.
+3. **Manual CLI Alternative (Optional):**
+   - Single command from repository root: `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front http://<PHONE_IP>:8080/video --no-gui`
+
 
 
 

@@ -163,6 +163,24 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
         stream_url: normalizedStreamUrl,
         status: "ONLINE",
       });
+
+      // Automatically launch / refresh the Python AI Vision Orchestrator on port 5000
+      let cctv1 = "0";
+      let cctv2 = "http://192.168.1.5:8080/video";
+      cameras.forEach((c) => {
+        const u = c.camera_id === selectedCamId ? normalizedStreamUrl : (c.stream_url || "");
+        if (c.camera_id === "CCTV_01") cctv1 = u.includes("http") ? u : (u || "0");
+        if (c.camera_id === "CCTV_02") cctv2 = u.includes("http") ? u : (u || "http://192.168.1.5:8080/video");
+      });
+      if (selectedCamId === "CCTV_01") cctv1 = normalizedStreamUrl || "0";
+      if (selectedCamId === "CCTV_02") cctv2 = normalizedStreamUrl || "http://192.168.1.5:8080/video";
+
+      await fetch("/api/cameras/start-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cctv1, cctv2, forceRestart: true }),
+      }).catch((e) => console.warn("Could not auto-start python stream:", e));
+
       onClose();
     } finally {
       setIsSaving(false);
