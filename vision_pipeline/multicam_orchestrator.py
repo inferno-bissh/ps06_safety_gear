@@ -24,6 +24,24 @@ from ppe_detector import WorkerPPEEvaluator
 from firestore_client import FirestoreSyncClient
 from web_streamer import WebStreamBroadcaster
 
+def normalize_camera_source(src, default="0"):
+    if src is None:
+        return default
+    s = str(src).strip().strip('"').strip("'")
+    if not s:
+        return default
+    if s.isdigit():
+        return int(s)
+    # Never accept recursive localhost:5000 broadcast feeds as camera inputs
+    if ":5000" in s:
+        return default
+    if s.startswith("http://") or s.startswith("https://") or s.startswith("rtsp://"):
+        # Auto-append /video if phone IP Webcam on port 8080 or 4747 lacks endpoint
+        if (":8080" in s or ":4747" in s) and not any(ep in s for ep in ["/video", "/videofeed", "/mjpeg", "/feed"]):
+            s = s.rstrip("/") + "/video"
+        return s
+    return s
+
 class MultiCameraOrchestrator:
     """
     Coordinates multi-camera surveillance across two functional zones:
@@ -37,6 +55,13 @@ class MultiCameraOrchestrator:
         self.test_mode = test_mode
         self.no_gui = no_gui
         self.demo_ppe_pass = demo_ppe_pass
+
+        gate_src = normalize_camera_source(gate_src, "0")
+        ward_src = normalize_camera_source(ward_src, "http://192.168.1.5:8080/video")
+        if cctv3_src:
+            cctv3_src = normalize_camera_source(cctv3_src, None)
+        if cctv4_src:
+            cctv4_src = normalize_camera_source(cctv4_src, None)
 
         print("=" * 70)
         print("  SAFETYINTEL ENTERPRISE MULTI-CCTV ORCHESTRATOR")
@@ -216,8 +241,8 @@ class MultiCameraOrchestrator:
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
-                    "gloves": ppe_res.get("gloves", "PASS"),
-                    "safety_shoes": ppe_res.get("safety_shoes", "PASS"),
+                    "gloves": ppe_res.get("gloves", "FAIL"),
+                    "safety_shoes": ppe_res.get("safety_shoes", "UNKNOWN"),
                 },
                 "bbox": {
                     "x": float(round((x1 / gw) * 100, 1)),
@@ -349,8 +374,8 @@ class MultiCameraOrchestrator:
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
-                    "gloves": "PASS",
-                    "safety_shoes": "PASS",
+                    "gloves": ppe_res.get("gloves", "FAIL"),
+                    "safety_shoes": ppe_res.get("safety_shoes", "UNKNOWN"),
                 },
                 "bbox": {
                     "x": float(round((x1 / ww) * 100, 1)),

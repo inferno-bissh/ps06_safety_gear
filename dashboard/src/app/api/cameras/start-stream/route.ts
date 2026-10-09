@@ -47,10 +47,21 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const cctv1 = body.cctv1 || "0";
-    const cctv2 = body.cctv2 || "http://192.168.1.5:8080/video";
+    let cctv1 = body.cctv1 || "0";
+    let cctv2 = body.cctv2 || "http://192.168.1.5:8080/video";
     const cctv3 = body.cctv3;
     const cctv4 = body.cctv4;
+
+    // Sanitize against broadcast URLs containing :5000
+    if (String(cctv1).includes(":5000")) cctv1 = "0";
+    if (String(cctv2).includes(":5000")) cctv2 = "http://192.168.1.5:8080/video";
+
+    // Auto-normalize phone camera endpoints on port 8080 or 4747
+    if (String(cctv2).startsWith("http://") && (String(cctv2).endsWith(":8080") || String(cctv2).endsWith(":8080/"))) {
+      cctv2 = String(cctv2).replace(/\/+$/, "") + "/video";
+    } else if (String(cctv2).startsWith("http://") && (String(cctv2).endsWith(":4747") || String(cctv2).endsWith(":4747/"))) {
+      cctv2 = String(cctv2).replace(/\/+$/, "") + "/video";
+    }
 
     let alreadyActive = await isPortActive(5000);
 

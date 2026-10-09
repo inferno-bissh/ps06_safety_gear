@@ -71,19 +71,25 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
 
   // Compute normalized stream URL
   const normalizedStreamUrl = useMemo(() => {
-    const raw = ipInput.trim();
+    let raw = ipInput.trim();
     if (!raw) return "";
     if (raw === "0" || raw === "1" || raw === "2") return raw;
-    if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("rtsp://")) {
-      return raw;
+    if (!raw.startsWith("http://") && !raw.startsWith("https://") && !raw.startsWith("rtsp://")) {
+      if (!raw.includes(":")) {
+        raw = `http://${raw}:8080/video`;
+      } else if (!raw.includes("/")) {
+        raw = `http://${raw}/video`;
+      } else {
+        raw = `http://${raw}`;
+      }
     }
-    if (!raw.includes(":")) {
-      return `http://${raw}:8080/video`;
+    // If it's an IP Webcam address on port 8080 or 4747 without an endpoint, automatically append /video
+    if (raw.startsWith("http://") && (raw.endsWith(":8080") || raw.endsWith(":8080/"))) {
+      raw = raw.replace(/\/+$/, "") + "/video";
+    } else if (raw.startsWith("http://") && (raw.endsWith(":4747") || raw.endsWith(":4747/"))) {
+      raw = raw.replace(/\/+$/, "") + "/video";
     }
-    if (!raw.includes("/")) {
-      return `http://${raw}/video`;
-    }
-    return `http://${raw}`;
+    return raw;
   }, [ipInput]);
 
   // Generate python orchestrator launch command
@@ -92,17 +98,17 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
     let cctv2 = `"http://192.168.1.5:8080/video"`;
     let cctv3 = "";
 
-    cameras.forEach((c) => {
-      const url = c.camera_id === selectedCamId ? normalizedStreamUrl : (c.stream_url || "");
-      if (c.camera_id === "CCTV_01") cctv1 = url.includes("http") ? `"${url}"` : (url || "0");
-      if (c.camera_id === "CCTV_02") cctv2 = url.includes("http") ? `"${url}"` : (url || `"http://192.168.1.5:8080/video"`);
-      if (c.camera_id === "CCTV_03" && url && !url.includes("unsplash")) cctv3 = ` --cctv3-side-left "${url}"`;
-    });
+    const c1 = cameras.find((c) => c.camera_id === "CCTV_01");
+    const c2 = cameras.find((c) => c.camera_id === "CCTV_02");
 
-    if (selectedCamId === "CCTV_01") {
-      cctv1 = normalizedStreamUrl.includes("http") ? `"${normalizedStreamUrl}"` : normalizedStreamUrl;
-    } else if (selectedCamId === "CCTV_02") {
-      cctv2 = normalizedStreamUrl.includes("http") ? `"${normalizedStreamUrl}"` : normalizedStreamUrl;
+    const c1Url = selectedCamId === "CCTV_01" ? normalizedStreamUrl : (c1?.stream_url || "");
+    const c2Url = selectedCamId === "CCTV_02" ? normalizedStreamUrl : (c2?.stream_url || "");
+
+    if (c1Url && !c1Url.includes(":5000")) {
+      cctv1 = c1Url.includes("http") ? `"${c1Url}"` : c1Url;
+    }
+    if (c2Url && !c2Url.includes(":5000")) {
+      cctv2 = c2Url.includes("http") ? `"${c2Url}"` : `"${c2Url || "http://192.168.1.5:8080/video"}"`;
     }
 
     return `python vision_pipeline/multicam_orchestrator.py --cctv1-gate ${cctv1} --cctv2-front ${cctv2}${cctv3}`;
@@ -165,15 +171,19 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
       });
 
       // Automatically launch / refresh the Python AI Vision Orchestrator on port 5000
-      let cctv1 = "0";
-      let cctv2 = "http://192.168.1.5:8080/video";
-      cameras.forEach((c) => {
-        const u = c.camera_id === selectedCamId ? normalizedStreamUrl : (c.stream_url || "");
-        if (c.camera_id === "CCTV_01") cctv1 = u.includes("http") ? u : (u || "0");
-        if (c.camera_id === "CCTV_02") cctv2 = u.includes("http") ? u : (u || "http://192.168.1.5:8080/video");
-      });
-      if (selectedCamId === "CCTV_01") cctv1 = normalizedStreamUrl || "0";
-      if (selectedCamId === "CCTV_02") cctv2 = normalizedStreamUrl || "http://192.168.1.5:8080/video";
+      // Ensure broadcast URLs containing :5000 are NEVER passed back as camera hardware sources!
+      const getSafeSource = (id: string, fallback: string) => {
+        if (selectedCamId === id) {
+          return normalizedStreamUrl || fallback;
+        }
+        const found = cameras.find((c) => c.camera_id === id);
+        const url = (found?.stream_url || "").trim();
+        if (!url || url.includes(":5000")) return fallback;
+        return url;
+      };
+
+      const cctv1 = getSafeSource("CCTV_01", "0");
+      const cctv2 = getSafeSource("CCTV_02", "http://192.168.1.5:8080/video");
 
       await fetch("/api/cameras/start-stream", {
         method: "POST",
@@ -304,11 +314,20 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
             <div className="flex flex-wrap items-center gap-1.5 mt-2">
               <span className="text-[10px] text-slate-500">Quick Presets:</span>
               <button
-                onClick={() => setIpInput("192.168.1.5")}
+                onClick={() => setIpInput("192.168.1.5:8080")}
                 className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                title="Android IP Webcam default port"
               >
                 <Smartphone className="w-2.5 h-2.5 text-blue-400" />
-                <span>Phone: 192.168.1.5</span>
+                <span>IP Webcam (:8080)</span>
+              </button>
+              <button
+                onClick={() => setIpInput("192.168.1.5:4747")}
+                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                title="DroidCam default port"
+              >
+                <Smartphone className="w-2.5 h-2.5 text-cyan-400" />
+                <span>DroidCam (:4747)</span>
               </button>
               <button
                 onClick={() => setIpInput("0")}
@@ -318,12 +337,25 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
                 <span>Laptop Webcam (0)</span>
               </button>
               <button
-                onClick={() => setIpInput("http://localhost:5000/video/cctv2")}
+                onClick={() => setIpInput("1")}
                 className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
               >
-                <Video className="w-2.5 h-2.5 text-purple-400" />
-                <span>Local Stream (5000)</span>
+                <Laptop className="w-2.5 h-2.5 text-purple-400" />
+                <span>USB / Iriun Cam (1)</span>
               </button>
+            </div>
+
+            {/* Step-by-step phone connection guide */}
+            <div className="mt-2.5 p-2.5 rounded bg-blue-950/20 border border-blue-500/20 text-[11px] text-slate-300 space-y-1">
+              <div className="font-bold text-blue-400 flex items-center gap-1">
+                <span>📱 Quick Phone Camera Setup:</span>
+              </div>
+              <p className="text-slate-400 text-[10px] leading-relaxed">
+                1. Connect phone &amp; laptop to the <strong className="text-slate-200">same Wi-Fi or Mobile Hotspot</strong>.<br />
+                2. On phone, open <strong className="text-slate-200">IP Webcam</strong> and tap <em className="text-emerald-400">&quot;Start server&quot;</em>.<br />
+                3. Enter the exact IP from your phone screen (e.g. <code className="text-amber-300 bg-slate-900 px-1 rounded">192.168.x.x:8080</code>) above.<br />
+                4. Click <strong className="text-blue-300">&quot;Test Link&quot;</strong> ➔ <strong className="text-emerald-400">&quot;Save &amp; Connect Camera&quot;</strong>.
+              </p>
             </div>
           </div>
 

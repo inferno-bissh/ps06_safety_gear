@@ -389,7 +389,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                       </div>
 
                       {/* PPE Inspection Tag at bottom */}
-                      <div className="absolute -bottom-6 left-0 flex gap-1">
+                      <div className="absolute -bottom-6 left-0 flex gap-1 flex-wrap">
                         <span
                           className={cn(
                             "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
@@ -413,6 +413,30 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                           )}
                         >
                           V: {worker.ppe.vest}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                            worker.ppe.gloves === "PASS"
+                              ? "bg-emerald-600 text-white"
+                              : worker.ppe.gloves === "FAIL"
+                              ? "bg-red-600 text-white"
+                              : "bg-purple-800 text-purple-200"
+                          )}
+                        >
+                          G: {worker.ppe.gloves}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                            worker.ppe.safety_shoes === "PASS"
+                              ? "bg-emerald-600 text-white"
+                              : worker.ppe.safety_shoes === "FAIL"
+                              ? "bg-red-600 text-white"
+                              : "bg-purple-800 text-purple-200"
+                          )}
+                        >
+                          F: {worker.ppe.safety_shoes}
                         </span>
                       </div>
                     </div>

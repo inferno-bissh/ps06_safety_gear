@@ -21,6 +21,11 @@ export async function POST(req: NextRequest) {
         streamUrl = `http://${streamUrl}`;
       }
     }
+    if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":8080") || streamUrl.endsWith(":8080/"))) {
+      streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
+    } else if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":4747") || streamUrl.endsWith(":4747/"))) {
+      streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
+    }
 
     // Attempt rapid probe to test reachability
     const controller = new AbortController();

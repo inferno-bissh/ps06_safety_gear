@@ -5,6 +5,9 @@ import time
 import numpy as np
 from typing import Tuple, Optional, Union
 
+# Set FFmpeg network timeout to 2.5s to prevent OpenCV from hanging on unreachable camera IPs
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2500000"
+
 def generate_synthetic_industrial_frame(w: int = 1280, h: int = 720, step: int = 0, camera_id: str = "CAM_TEST") -> np.ndarray:
     """Generates an animated high-tech industrial camera frame if physical feed is unavailable."""
     frame = np.zeros((h, w, 3), dtype=np.uint8)
@@ -69,19 +72,25 @@ class ThreadedCameraStream:
                     temp_cap.release()
             if self.cap is None:
                 self.cap = cv2.VideoCapture(self.src)
+        elif isinstance(self.src, str) and (self.src.startswith("http://") or self.src.startswith("https://") or self.src.startswith("rtsp://")):
+            # Auto-normalize IP Webcam endpoints: append /video if port 8080 or 4747 lacks endpoint
+            if (":8080" in self.src or ":4747" in self.src) and not any(ep in self.src for ep in ["/video", "/videofeed", "/mjpeg", "/feed"]):
+                self.src = self.src.rstrip("/") + "/video"
+            # Connect network streams asynchronously in background thread to guarantee sub-50ms engine startup
+            self.is_synthetic_mode = True
+            print(f"[Stream Manager] Registering network camera {camera_id} at '{self.src}' (asynchronous auto-reconnect active).")
         else:
             self.cap = cv2.VideoCapture(self.src)
         
-        if self.cap is None or not self.cap.isOpened():
-            print(f"[Stream Warning] Unable to open physical stream '{self.src}'. Running synthetic generator for {camera_id}.")
-            self.is_synthetic_mode = True
-        else:
-            # Set buffer size to 1 to eliminate queue buildup
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # Try setting optimal resolution (fallback if unsupported)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            print(f"[Stream Initialized] Connected to {camera_id} via '{self.src}'.")
+        if not self.is_synthetic_mode:
+            if self.cap is None or not self.cap.isOpened():
+                print(f"[Stream Warning] Unable to open physical stream '{self.src}'. Running synthetic generator for {camera_id}.")
+                self.is_synthetic_mode = True
+            else:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                print(f"[Stream Initialized] Connected to {camera_id} via '{self.src}'.")
 
         # Start background capture daemon
         self.is_running = True

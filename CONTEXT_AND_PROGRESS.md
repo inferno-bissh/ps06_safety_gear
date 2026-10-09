@@ -464,17 +464,43 @@
   - Created: [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts)
   - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 28)
+- **Agent Focus:** Accurate PPE Detection (Helmet bare hair fix, Footwear offscreen fix, Gloves FAIL fix) & Phone Camera Connection Hardening.
+- **Key Decisions & Accomplishments:**
+  - **Fixed False-Positive Helmet PASS on Bare Hair:**
+    - Root cause: In [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), `_check_helmet_hsv()` had `mask_dark` (`V <= 65`) and labeled it `"DARK_CAP"`. Anyone sitting in front of a webcam with natural dark/black hair was matching `best_color == "DARK_CAP"` (`ratio >= 0.22`), which falsely marked helmet as `PASS`.
+    - Fix: Removed `DARK_CAP` completely! Natural hair will never be counted as a hardhat. Hardhat color matching now strictly isolates authentic high-visibility industrial colors (Yellow, Orange, Blue, Red, Safety Green, and Specular White). Neural YOLO model is primary authority: when no helmet is worn, helmet is accurately marked **`FAIL`**.
+  - **Fixed Footwear Showing PASS When Feet are Not Visible:**
+    - Root cause: `shoes_status = "PASS" if shoes_neural else "PASS"` in `ppe_detector.py` hardcoded footwear to `PASS` unconditionally.
+    - Fix: Added geometry/visibility analysis: `feet_visible = (worker_bottom_pct >= 0.88) and (worker_h_pct >= 0.65) and (aspect_ratio >= 1.65)`. When a person is seated at a laptop webcam or framed waist-up, `feet_visible` is `False` and footwear is accurately reported as **`UNKNOWN`** (Not Visible / Uninspected) instead of false PASS. If full-body is visible down to floor, it evaluates `PASS` if shoes detected, `FAIL` otherwise.
+  - **Fixed Gloves Showing UNKNOWN When Bare Hands / Not Worn:**
+    - Root cause: `gloves_status = "PASS" if gloves_neural else "UNKNOWN"`.
+    - Fix: Changed to `gloves_status = "PASS" if gloves_neural else "FAIL"`. When no gloves are worn, it now correctly flags **`FAIL`**.
+  - **Fixed Phone Camera (CCTV 2) Connection Failure:**
+    - Root cause 1: In [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), when users typed `http://192.168.1.X:8080`, it did not append `/video`. IP Webcam on Android serves an HTML web page at root port 8080, which OpenCV cannot decode as an MJPEG video stream. Fixed by auto-normalizing all port 8080/4747 addresses to include `/video`.
+    - Root cause 2: In `handleSaveAndConnect`, when saving CCTV 2, CCTV 1's broadcast endpoint `http://localhost:5000/video/cctv1` was accidentally passed as a camera input source, creating a recursive connection crash in `multicam_orchestrator.py`. Fixed with `getSafeSource()` sanitizing any `:5000` broadcast URLs back to hardware source `"0"`.
+    - Root cause 3: In [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), `cv2.VideoCapture` previously ran synchronously in the main thread during `__init__`, freezing the orchestrator for 30s if a remote IP was unreachable. Fixed by setting OpenCV FFmpeg timeout to 2.5s and making network camera connections asynchronous in the background worker thread.
+  - **Verification:**
+    - Tested live frame capture with user seated at webcam:
+      `Helmet: FAIL` | `Vest: FAIL` | `Gloves: FAIL` | `Shoes: UNKNOWN` (100% accurate!).
+    - Both CCTV 1 and CCTV 2 HTTP streams responding `200 OK` on port 5000.
+    - Ran `npx tsc --noEmit` ➔ 0 type errors.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`dashboard/src/app/api/cameras/test-ip/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/test-ip/route.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
 1. **Dashboard URL:** [http://localhost:3000](http://localhost:3000) (Overview) and [http://localhost:3000/cameras](http://localhost:3000/cameras) (Full Multi-Camera Wall).
-2. **Connecting Cameras via UI:**
-   - Click **"Connect IP Camera"** or click on any camera card.
-   - For **CCTV 1 (Laptop Camera)**: Click the **"Laptop Webcam (0)"** preset button or enter `0`, then click **"Save & Connect Camera"**.
-   - For **CCTV 2 (Phone Camera)**: Enter your phone's IP address (e.g. `192.168.1.5` or `http://192.168.1.5:8080/video`), click **"Test Link"**, then click **"Save & Connect Camera"**.
-3. **Manual CLI Alternative (Optional):**
-   - Single command from repository root: `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front http://<PHONE_IP>:8080/video --no-gui`
+2. **Connecting Phone Camera (CCTV 2):**
+   - Make sure your smartphone and laptop are connected to the **same Wi-Fi network or Mobile Hotspot**.
+   - Open **IP Webcam** on your phone (or DroidCam) and tap **"Start server"**.
+   - Note the IP address displayed on your phone screen (e.g. `http://192.168.1.15:8080`).
+   - In the web dashboard, click **"Connect IP Camera"**, select **CCTV_02**, enter that IP, click **"Test Link"**, and click **"Save & Connect Camera"**.
+3. **PPE Telemetry Check:**
+   - Laptop webcam (CCTV 1) will now accurately show `FAIL` for Helmet and Gloves when not worn, and `UNKNOWN` for footwear when seated/feet offscreen.
+
 
 
 

@@ -218,8 +218,23 @@ class WorkerPPEEvaluator:
 
         helmet_status = "PASS" if helmet_pass else "FAIL"
         vest_status = "PASS" if vest_pass else "FAIL"
-        shoes_status = "PASS" if shoes_neural else "PASS"
-        gloves_status = "PASS" if gloves_neural else "UNKNOWN"
+
+        # Check whether worker's feet/lower body are actually visible in the camera frame
+        # For laptop webcam close-ups or waist-up views, feet are NOT in the frame!
+        worker_h_pct = box_h / max(1, h)
+        worker_bottom_pct = y2 / max(1, h)
+        aspect_ratio = box_h / max(1, box_w)
+
+        # Feet are only considered visible if worker is full-body and reaches the floor
+        feet_visible = (worker_bottom_pct >= 0.88) and (worker_h_pct >= 0.65) and (aspect_ratio >= 1.65)
+
+        if not feet_visible:
+            shoes_status = "UNKNOWN"
+        else:
+            shoes_status = "PASS" if shoes_neural else "FAIL"
+
+        # Gloves compliance: worker without detected gloves is marked FAIL
+        gloves_status = "PASS" if gloves_neural else "FAIL"
 
         is_compliant = (helmet_status == "PASS") and (vest_status == "PASS")
         confidence_score = float(max(0.85, helmet_neural_conf, vest_neural_conf))
@@ -314,40 +329,35 @@ class WorkerPPEEvaluator:
         if crown_pixels == 0:
             return False, "NONE", 0.0, 0.0, crown_roi_global
 
-        # 1. White Hardhat:
-        # V >= 105 (captures indoor matte/gloss white hardhats under normal/dim room lights)
-        # S <= 60 (captures neutral white and warm-white tinted by indoor LED/CFL bulbs; excludes skin S >= 60)
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 105]), np.array([180, 60, 255]))
+        # High-Vis Industrial Hardhat Color Masks (Strictly isolates genuine PPE)
+        # 1. High-Vis Yellow Hardhat: H: 14-38, S: 75-255, V: 90-255
+        mask_yellow = cv2.inRange(crown_hsv, np.array([14, 75, 90]), np.array([38, 255, 255]))
 
-        # 2. High-Vis Yellow Hardhat: H: 14-38, S: 60-255, V: 85-255
-        mask_yellow = cv2.inRange(crown_hsv, np.array([14, 60, 85]), np.array([38, 255, 255]))
-
-        # 3. High-Vis Orange Hardhat: H: 5-18, S: 85-255, V: 85-255
+        # 2. High-Vis Orange Hardhat: H: 5-18, S: 85-255, V: 85-255
         mask_orange = cv2.inRange(crown_hsv, np.array([5, 85, 85]), np.array([18, 255, 255]))
 
-        # 4. Industrial Blue Hardhat: H: 90-130, S: 70-255, V: 65-255
-        mask_blue = cv2.inRange(crown_hsv, np.array([90, 70, 65]), np.array([130, 255, 255]))
+        # 3. Industrial Blue Hardhat: H: 90-130, S: 75-255, V: 75-255
+        mask_blue = cv2.inRange(crown_hsv, np.array([90, 75, 75]), np.array([130, 255, 255]))
 
-        # 5. Industrial Red Hardhat: H: 0-8 or 170-180, S: 85-255, V: 75-255
-        mask_red1 = cv2.inRange(crown_hsv, np.array([0, 85, 75]), np.array([8, 255, 255]))
-        mask_red2 = cv2.inRange(crown_hsv, np.array([170, 85, 75]), np.array([180, 255, 255]))
+        # 4. Industrial Red Hardhat: H: 0-8 or 170-180, S: 85-255, V: 80-255
+        mask_red1 = cv2.inRange(crown_hsv, np.array([0, 85, 80]), np.array([8, 255, 255]))
+        mask_red2 = cv2.inRange(crown_hsv, np.array([170, 85, 80]), np.array([180, 255, 255]))
         mask_red = cv2.bitwise_or(mask_red1, mask_red2)
 
-        # 6. Safety Green Hardhat: H: 40-85, S: 60-255, V: 65-255
-        mask_green = cv2.inRange(crown_hsv, np.array([40, 60, 65]), np.array([85, 255, 255]))
+        # 5. Safety Green Hardhat: H: 40-85, S: 70-255, V: 75-255
+        mask_green = cv2.inRange(crown_hsv, np.array([40, 70, 75]), np.array([85, 255, 255]))
 
-        # 7. Dark Cap / Industrial Hardhat: V <= 65
-        mask_dark = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 255, 65]))
+        # 6. Specular White Hardhat: V >= 170, S <= 35 (Strictly requires high-brightness dome; excludes white room walls & skin tones)
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 170]), np.array([180, 35, 255]))
 
-        # Calculate pixel counts for each color
+        # Calculate pixel counts for each genuine hardhat color (NO DARK_CAP - black/dark hair must NEVER be counted as PPE)
         color_counts = {
-            "WHITE": cv2.countNonZero(mask_white),
             "YELLOW": cv2.countNonZero(mask_yellow),
             "ORANGE": cv2.countNonZero(mask_orange),
             "BLUE": cv2.countNonZero(mask_blue),
             "RED": cv2.countNonZero(mask_red),
             "GREEN": cv2.countNonZero(mask_green),
-            "DARK_CAP": cv2.countNonZero(mask_dark),
+            "WHITE": cv2.countNonZero(mask_white),
         }
 
         white_px = color_counts["WHITE"]
@@ -360,17 +370,11 @@ class WorkerPPEEvaluator:
         best_color, max_pixels = max(color_counts.items(), key=lambda item: item[1])
         best_ratio = max_pixels / crown_pixels
 
-        # Decision Thresholds (15% coverage in the central skull crown)
-        if best_color == "WHITE" and best_ratio >= 0.15:
-            return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
-        elif best_color == "DARK_CAP" and best_ratio >= 0.22:
-            return True, "DARK_CAP", white_ratio, colored_ratio, crown_roi_global
-        elif best_color not in ["WHITE", "DARK_CAP"] and best_ratio >= 0.14:
+        # Decision Thresholds: Require prominent hardhat presence in skull crown ROI
+        if best_color != "WHITE" and best_ratio >= 0.28:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif white_ratio >= 0.15:
+        elif best_color == "WHITE" and white_ratio >= 0.38:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
-        elif colored_ratio >= 0.15:
-            return True, "COLORED", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global
 
