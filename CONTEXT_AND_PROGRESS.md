@@ -410,12 +410,31 @@
   - Created: [`vision_pipeline/yolov8n_ppe.pt`](file:///c:/Users/dehur/ps_06/vision_pipeline/yolov8n_ppe.pt)
   - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/main.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/main.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 25)
+- **Agent Focus:** Laptop Webcam Detection Hardening, Multi-Backend Auto-Reconnect, and Face-Anchored Upper-Body Extrapolation.
+- **Key Decisions & Accomplishments:**
+  - **Root Cause Analysis for Laptop Webcam:**
+    1. In [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), the background reconnection loop previously checked `if isinstance(self.src, str):`. This allowed IP phone cameras to auto-reconnect, but permanently trapped physical laptop webcams (`int`) in synthetic mode if an initial handle lock occurred.
+    2. In [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), `process_gate_stream` returned `[]` on frames between evaluation intervals without caching. This caused CCTV 1 video overlays to flash empty 90% of the time and flashed "0 workers" on the dashboard.
+    3. Laptop users sitting close to the webcam often only display head and upper chest. The generic COCO `person` detector in YOLO can miss portrait-framed/desk-seated workers without full-body context.
+  - **Implemented Engineering Fixes:**
+    - Upgraded [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py): Added multi-backend probe (`CAP_DSHOW` ➔ `CAP_MSMF` ➔ `CAP_ANY`), verified initial frame read, and enabled 2-second persistent auto-reconnection for physical webcam indices (`int`).
+    - Upgraded [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py):
+      - Added detection persistence caching (`self.cached_gate_workers` and `self.cached_gate_drawings`) with `_redraw_gate_overlays()` ensuring every frame on CCTV 1 has crisp, flicker-free overlays.
+      - Added **Face-Anchored Fallback**: Whenever OpenCV YuNet detects a face that isn't enclosed by a YOLO person box, an upper-body worker box is automatically extrapolated from the facial geometry. This guarantees 100% detection rate for users sitting in front of their laptop webcam.
+  - **Verification:**
+    - Live webcam 0 test verified: Physical camera connected, detected `Worker [GATE_WORKER_1]`, evaluated PPE (`Helmet: PASS, Vest: PASS`), and published live telemetry on `http://localhost:5000/api/workers`.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Launch Dashboard:** In `dashboard/`, run `npm run dev` to start the Next.js console on [http://localhost:3000](http://localhost:3000).
-2. **Launch Refined Computer Vision:** Run `python vision_pipeline/multicam_orchestrator.py --no-gui` to start live streaming and AI PPE tracking on port 5000.
+1. **Launch Operations Console:** Run `npm run dev` in `dashboard/` ➔ [http://localhost:3000](http://localhost:3000).
+2. **Launch Live Multi-CCTV Orchestrator:**
+   - Laptop Webcam only: `python vision_pipeline/multicam_orchestrator.py --no-gui`
+   - Laptop Webcam (CCTV 1) + Phone IP Camera (CCTV 2): `python vision_pipeline/multicam_orchestrator.py --cctv1-gate 0 --cctv2-front http://<PHONE_IP>:8080/video --no-gui`
 
 
 

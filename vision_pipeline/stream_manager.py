@@ -56,21 +56,29 @@ class ThreadedCameraStream:
         self.is_running: bool = False
         self.is_synthetic_mode: bool = False
         
-        # Connect to stream (use DirectShow backend on Windows for physical webcams to prevent MSMF locking)
+        # Connect to stream with resilient backend fallback on Windows
+        self.cap = None
         if isinstance(self.src, int) and os.name == "nt":
-            self.cap = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
-            if not self.cap.isOpened():
+            for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
+                temp_cap = cv2.VideoCapture(self.src, backend)
+                if temp_cap.isOpened():
+                    ret, test_frame = temp_cap.read()
+                    if ret and test_frame is not None:
+                        self.cap = temp_cap
+                        break
+                    temp_cap.release()
+            if self.cap is None:
                 self.cap = cv2.VideoCapture(self.src)
         else:
             self.cap = cv2.VideoCapture(self.src)
         
-        if not self.cap.isOpened():
+        if self.cap is None or not self.cap.isOpened():
             print(f"[Stream Warning] Unable to open physical stream '{self.src}'. Running synthetic generator for {camera_id}.")
             self.is_synthetic_mode = True
         else:
             # Set buffer size to 1 to eliminate queue buildup
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # Try setting resolution
+            # Try setting optimal resolution (fallback if unsupported)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             print(f"[Stream Initialized] Connected to {camera_id} via '{self.src}'.")
@@ -89,26 +97,41 @@ class ThreadedCameraStream:
             step += 1
             now = time.time()
 
-            # If stream is offline/synthetic, periodically attempt reconnection
+            # If stream is offline/synthetic, periodically attempt reconnection for BOTH physical webcam (int) and network IP (str)
             if self.is_synthetic_mode:
-                if isinstance(self.src, str) and (now - last_reconnect_attempt > 3.0):
+                if now - last_reconnect_attempt > 2.0:
                     last_reconnect_attempt = now
                     try:
-                        test_cap = cv2.VideoCapture(self.src)
-                        if test_cap.isOpened():
-                            ret_test, frame_test = test_cap.read()
-                            if ret_test and frame_test is not None:
-                                self.cap = test_cap
-                                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                                self.is_synthetic_mode = False
-                                print(f"[Stream Restored] Successfully connected camera stream for {self.camera_id} via '{self.src}'.")
-                                with self.lock:
-                                    self.latest_frame = frame_test
-                                    self.latest_timestamp = now
-                                    self.frame_count += 1
-                                continue
-                            else:
-                                test_cap.release()
+                        test_cap = None
+                        if isinstance(self.src, int):
+                            backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY] if os.name == "nt" else [cv2.CAP_ANY]
+                            for backend in backends:
+                                c = cv2.VideoCapture(self.src, backend)
+                                if c.isOpened():
+                                    ret_test, frame_test = c.read()
+                                    if ret_test and frame_test is not None:
+                                        test_cap = c
+                                        break
+                                    c.release()
+                        else:
+                            c = cv2.VideoCapture(self.src)
+                            if c.isOpened():
+                                ret_test, frame_test = c.read()
+                                if ret_test and frame_test is not None:
+                                    test_cap = c
+                                else:
+                                    c.release()
+
+                        if test_cap is not None and test_cap.isOpened():
+                            self.cap = test_cap
+                            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            self.is_synthetic_mode = False
+                            print(f"[Stream Restored] Successfully connected camera feed for {self.camera_id} via '{self.src}'.")
+                            with self.lock:
+                                self.latest_frame = frame_test
+                                self.latest_timestamp = now
+                                self.frame_count += 1
+                            continue
                     except Exception:
                         pass
 

@@ -83,6 +83,8 @@ class MultiCameraOrchestrator:
         self.active_checked_in_workers: Dict[str, dict] = {}
         self.violation_counters: Dict[int, int] = {}
         self.last_gate_eval_time: float = 0.0
+        self.cached_gate_workers = []
+        self.cached_gate_drawings = []
 
         # Pre-seed a checked-in worker for demo fallback if empty
         if len(self.active_checked_in_workers) == 0 and len(self.face_engine.database.get("names", [])) > 0:
@@ -100,29 +102,73 @@ class MultiCameraOrchestrator:
         if not self.test_mode:
             self.web_broadcaster.start()
 
+    def _redraw_gate_overlays(self, frame: np.ndarray, drawings: list):
+        """Re-draws cached worker detection overlays onto the gate frame to ensure flicker-free rendering."""
+        for d in drawings:
+            x1, y1, x2, y2 = d["box"]
+            box_col = d["box_col"]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_col, 2)
+            cv2.rectangle(frame, (x1, y1), (x2, d["head_y2"]), (255, 200, 0), 1)
+            cv2.putText(frame, d["lbl"], (x1 + 4, max(15, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_col, 1)
+            cv2.putText(frame, d["ppe_lbl"], (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+            cx1, cy1, cx2, cy2 = d["crown_roi"]
+            if cx2 > cx1 and cy2 > cy1:
+                roi_col = (0, 255, 120) if d["helmet"] == "PASS" else (0, 140, 255)
+                cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+
     def process_gate_stream(self, gate_frame: np.ndarray) -> list:
         """Processes choke-point gate camera for identity verification, PPE evaluation, and access logging."""
         if gate_frame is None or gate_frame.size == 0:
             return []
 
         now = time.time()
-        # Evaluate Gate once every 0.3s (3 FPS) to save CPU
-        if now - self.last_gate_eval_time < 0.30:
-            return []
-        self.last_gate_eval_time = now
+        # Throttled evaluation interval (~0.12s, 8 FPS) to save CPU while maintaining persistence
+        # Between evaluations, smoothly redraw cached detections on the current frame
+        if (now - self.last_gate_eval_time < 0.12) and len(self.cached_gate_drawings) > 0:
+            self._redraw_gate_overlays(gate_frame, self.cached_gate_drawings)
+            return self.cached_gate_workers
 
-        # Run person detection with optimized confidence threshold
-        results = self.model(gate_frame, classes=[0], verbose=False, conf=PERSON_CONF_THRESHOLD)
-        if not results or len(results[0].boxes) == 0:
+        self.last_gate_eval_time = now
+        gh, gw = gate_frame.shape[:2]
+
+        # 1. Person Detection with low threshold (0.28) for close-up webcam framing
+        results = self.model(gate_frame, classes=[0], verbose=False, conf=0.28)
+        boxes = []
+        if results and len(results[0].boxes) > 0:
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int).tolist()
+
+        # 2. Face-Anchored Fallback (ensures desk/laptop users close to camera are always detected)
+        if self.face_engine.use_native_sface and self.face_engine.detector:
+            self.face_engine.detector.setInputSize((gw, gh))
+            _, faces = self.face_engine.detector.detect(gate_frame)
+            if faces is not None:
+                for f in faces:
+                    fx, fy, fw, fh = map(int, f[:4])
+                    # Check if face is already inside an existing YOLO person box
+                    is_covered = any(
+                        bx1 <= (fx + fw // 2) <= bx2 and by1 <= (fy + fh // 2) <= by2
+                        for bx1, by1, bx2, by2 in boxes
+                    )
+                    if not is_covered:
+                        # Extrapolate upper body box from face
+                        wx1 = max(0, fx - int(fw * 0.45))
+                        wy1 = max(0, fy - int(fh * 0.35))
+                        wx2 = min(gw, fx + fw + int(fw * 0.45))
+                        wy2 = min(gh, fy + fh + int(fh * 2.8))
+                        boxes.append([wx1, wy1, wx2, wy2])
+
+        if not boxes:
+            self.cached_gate_workers = []
+            self.cached_gate_drawings = []
             return []
 
         # Run dedicated neural YOLO PPE detection once for the gate frame
         ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(gate_frame)
 
         gate_workers = []
-        gh, gw = gate_frame.shape[:2]
+        gate_drawings = []
 
-        for idx, box in enumerate(results[0].boxes.xyxy.cpu().numpy()):
+        for idx, box in enumerate(boxes):
             x1, y1, x2, y2 = map(int, box)
             # Head/upper crop for facial verification
             head_h = max(20, int((y2 - y1) * 0.40))
@@ -144,24 +190,22 @@ class MultiCameraOrchestrator:
             h_src = ppe_res.get("helmet_source", "NONE")
             v_src = ppe_res.get("vest_source", "NONE")
 
-            # Draw visual overlay on Gate frame
             box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
-            cv2.rectangle(gate_frame, (x1, y1), (x2, y2), box_col, 2)
-            cv2.rectangle(gate_frame, (x1, y1), (x2, y1 + head_h), (255, 200, 0), 1)
-
-            # Top label: Name / Worker ID + Face Confidence
             lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [{worker_id}]"
-            cv2.putText(gate_frame, lbl, (x1 + 4, max(15, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_col, 1)
-
-            # PPE Badge on Gate Camera: HELMET & VEST
             ppe_lbl = f"H:{helmet} [{h_col}] | V:{vest} [{v_col}]"
-            cv2.putText(gate_frame, ppe_lbl, (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
-
-            # Draw Crown ROI indicator (the skull helmet inspection dome)
             cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
-            if cx2 > cx1 and cy2 > cy1:
-                roi_col = (0, 255, 120) if helmet == "PASS" else (0, 140, 255)
-                cv2.rectangle(gate_frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+
+            drawing_data = {
+                "box": (x1, y1, x2, y2),
+                "head_y2": y1 + head_h,
+                "box_col": box_col,
+                "lbl": lbl,
+                "ppe_lbl": ppe_lbl,
+                "crown_roi": (cx1, cy1, cx2, cy2),
+                "is_compliant": is_compliant,
+                "helmet": helmet,
+            }
+            gate_drawings.append(drawing_data)
 
             # Append to telemetry
             gate_workers.append({
@@ -209,6 +253,10 @@ class MultiCameraOrchestrator:
                     print(f"\n[GATE AUDIT LOG] {name} checked in at {checkin_time_str} (PPE: {gate_ppe_status}, Conf: {score:.2f})")
                     self.firestore.push_gate_log(gate_log_payload)
 
+        # Cache for smooth re-rendering on subsequent frames
+        self.cached_gate_workers = gate_workers
+        self.cached_gate_drawings = gate_drawings
+        self._redraw_gate_overlays(gate_frame, gate_drawings)
         return gate_workers
 
     def process_ward_stream(self, ward_frame: np.ndarray) -> list:
