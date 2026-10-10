@@ -488,18 +488,44 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`dashboard/src/app/api/cameras/test-ip/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/test-ip/route.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 29)
+- **Agent Focus:** Elimination of Helmet False-Positive on Paper Bags, Body/Hands Boundary Visibility Inspection, Strict Neural YOLO Authority, and Phone CCTV (CCTV 2) Compliance Integrity.
+- **Key Decisions & Accomplishments:**
+  - **Fixed Helmet False-Positive on Paper Carry Bags (CCTV 1 & CCTV 2):**
+    - *Root cause:* In [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), `evaluate_ppe()` previously allowed HSV dome heuristics (`elif helmet_hsv_pass`) to grant `helmet_pass = True` unconditionally when no helmet was detected neurally. Kraft paper bags (`HSV [16, 131, 185]`) fell directly into the broad Orange/Yellow color masks.
+    - *Fix:* Made dedicated neural YOLO (`yolov8n_ppe.pt`) the mandatory authoritative gatekeeper for helmet verification (`conf >= 0.35`). When neural weights are loaded, paper bags, cardboard boxes, cloth, hair, or towels are rejected as **`Helmet: FAIL`**. HSV inspection now serves exclusively to classify hardhat color (`YELLOW`, `ORANGE`, `BLUE`, etc.) once the neural model verifies helmet geometry. Tightened HSV masks (Orange: $S \ge 145$, Yellow: $S \ge 115$) to reject matte kraft paper.
+  - **Fixed Phone CCTV (CCTV 2) False-Pass on Partial/Poorly Visible Body & Hands:**
+    - *Root cause 1 (Body):* Torso visibility was previously unvalidated. Close-up phone camera framing (head/neck only or waist-up cut off by phone screen border) triggered `_check_vest_hsv` on normal blue or orange shirts, awarding false vest PASS without neural detection.
+    - *Fix 1:* Added geometric `torso_visible` gatekeeper checking box aspect ratio ($\ge 1.12$), pixel height ($\ge 75$), and lower chest frame boundary clearance. When the torso is cropped out or cut off at the camera edge, vest is accurately reported as **`UNKNOWN`** (`OUT_OF_FRAME`) instead of false PASS. When visible, neural YOLO is the required authority for safety vests (`conf >= 0.30`).
+    - *Root cause 2 (Hands):* Hands hanging below the bottom edge of the phone frame were not recognized as out-of-frame.
+    - *Fix 2:* Added `hands_visible` analysis. When a worker is cut off at the waist or chest, gloves are marked **`UNKNOWN`** (`Hands Out of Frame`). In CCTV 2 (Welding Zone), compliance strictly enforces all 3 items: `is_compliant = (helmet == "PASS") and (vest == "PASS") and (gloves == "PASS")`. If hands or body are cut off or missing, the worker is flagged as **NON-COMPLIANT** (`is_compliant = False`, Amber `#f59e0b` box).
+  - **Tactical HUD & Stream Overlay Upgrades:**
+    - Added gloves status to camera stream labels on both CCTV 1 and CCTV 2: `H:{helmet} | V:{vest} | G:{gloves}`.
+    - Added dynamic warning text on CCTV 2: `[PARTIAL VIEW: BODY/HANDS OUT OF FRAME]` when framing is incomplete.
+    - Crown ROI dome indicator on video feed now draws in green only if helmet is genuinely `PASS`, and amber/orange if `FAIL`.
+  - **Verification:**
+    - Created and ran unit test suite (`test_ppe_fix.py`):
+      1. Brown paper bag on head ➔ Evaluated as `Helmet: FAIL` (Passed).
+      2. Partial close-up view ➔ Evaluated as `Vest: UNKNOWN, Gloves: UNKNOWN, is_compliant: False` (Passed).
+      3. Genuine PPE items ➔ Evaluated as `Helmet: PASS, Vest: PASS, Gloves: PASS, is_compliant: True` (Passed).
+    - Live restarted vision engine on port 5000 and verified live telemetry: `GATE_WORKER_1` partial view accurately reported `helmet: FAIL`, `vest: UNKNOWN`, `gloves: UNKNOWN`, `color: #f59e0b`.
+    - Ran `npx tsc --noEmit` in `dashboard/` ➔ 0 type errors.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Dashboard URL:** [http://localhost:3000](http://localhost:3000) (Overview) and [http://localhost:3000/cameras](http://localhost:3000/cameras) (Full Multi-Camera Wall).
-2. **Connecting Phone Camera (CCTV 2):**
-   - Make sure your smartphone and laptop are connected to the **same Wi-Fi network or Mobile Hotspot**.
-   - Open **IP Webcam** on your phone (or DroidCam) and tap **"Start server"**.
-   - Note the IP address displayed on your phone screen (e.g. `http://192.168.1.15:8080`).
-   - In the web dashboard, click **"Connect IP Camera"**, select **CCTV_02**, enter that IP, click **"Test Link"**, and click **"Save & Connect Camera"**.
-3. **PPE Telemetry Check:**
-   - Laptop webcam (CCTV 1) will now accurately show `FAIL` for Helmet and Gloves when not worn, and `UNKNOWN` for footwear when seated/feet offscreen.
+1. **Operations Console Dashboard:** [http://localhost:3000](http://localhost:3000) (Overview) and [http://localhost:3000/cameras](http://localhost:3000/cameras) (Multi-CCTV Wall).
+2. **Testing Paper Bag & Partial Body Framing:**
+   - Laptop webcam (CCTV 1) and Phone camera (CCTV 2) now both correctly flag a paper bag as **`Helmet: FAIL`** (neural YOLO gatekeeper).
+   - If holding the phone camera close-up or if hands/body are cut off at the edge of the frame, the system flags **`PARTIAL VIEW`** with **`Vest: UNKNOWN`** and **`Gloves: UNKNOWN`**, and keeps the bounding box amber/warning rather than awarding a false pass.
+3. **Connecting Phone Camera (CCTV 2):**
+   - Connect phone & laptop to same Wi-Fi / hotspot.
+   - Start IP Webcam on phone (e.g. `http://192.168.1.5:8080`).
+   - In Dashboard `/cameras`, click "Connect IP Camera" for CCTV_02, enter IP, and click "Save & Connect".
+
 
 
 

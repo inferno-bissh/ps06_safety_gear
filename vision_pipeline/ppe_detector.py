@@ -3,7 +3,12 @@ from pathlib import Path
 import numpy as np
 import cv2
 from typing import Dict, Tuple, Optional, List
-from config import TEMPORAL_CONFIRMATION_FRAMES, PPE_MODEL_PATH, PPE_CONF_THRESHOLD
+from config import (
+    TEMPORAL_CONFIRMATION_FRAMES,
+    PPE_MODEL_PATH,
+    PPE_CONF_THRESHOLD,
+    HELMET_CONF_THRESHOLD,
+)
 
 class WorkerPPEEvaluator:
     def __init__(
@@ -154,8 +159,12 @@ class WorkerPPEEvaluator:
                     if (y1 + box_h * 0.65) <= icy <= (y2 + box_h * 0.15):
                         shoes_neural = True
 
-        # 2. Adaptive Posture Crops for HSV Color Classification
+        # Worker dimensions & aspect ratio
         aspect_ratio = box_h / max(1, box_w)
+        worker_h_pct = box_h / max(1, h)
+        worker_bottom_pct = y2 / max(1, h)
+
+        # 2. Adaptive Posture Crops for HSV Color Classification
         if aspect_ratio < 1.6:
             head_h_ratio = 0.35
             torso_y1_ratio = 0.30
@@ -172,6 +181,38 @@ class WorkerPPEEvaluator:
         torso_y2 = y1 + int(box_h * torso_y2_ratio)
         torso_crop = frame[torso_y1:torso_y2, x1:x2]
 
+        # Torso / Body Visibility Check:
+        # A worker's torso is only considered visible if:
+        # 1. The box is sufficiently tall (box_h >= 75 and at least 18% of frame height)
+        # 2. Aspect ratio is >= 1.12 (if box is square or wide, it's just a face/head close-up)
+        # 3. Torso region has real pixel height (>= 30px)
+        # 4. Lower chest is not cut off by the frame bottom edge
+        torso_pixel_h = max(0, torso_y2 - torso_y1)
+        torso_visible = (
+            box_h >= 75
+            and worker_h_pct >= 0.18
+            and aspect_ratio >= 1.12
+            and torso_pixel_h >= 30
+            and (y1 + int(box_h * 0.45)) < (h - 8)
+        )
+
+        # Feet are only considered visible if worker is full-body and reaches the floor
+        feet_visible = (worker_bottom_pct >= 0.88) and (worker_h_pct >= 0.65) and (aspect_ratio >= 1.65)
+
+        # Hands / Gloves Visibility Check:
+        # If neural model detected gloves -> hands are definitely visible in frame
+        if gloves_neural:
+            hands_visible = True
+        else:
+            # When a worker is cut off at the chest/waist by the camera's bottom edge (y2 >= h - 12 and aspect_ratio < 1.60),
+            # or worker is framed waist-up without arms extending into view, hands are outside the frame!
+            hands_cut_off = (y2 >= h - 12) and (aspect_ratio < 1.60)
+            hands_visible = (
+                (box_h >= 110)
+                and (not hands_cut_off)
+                and (aspect_ratio >= 1.40 or feet_visible)
+            )
+
         # Run Secondary HSV Inspection
         helmet_hsv_pass, helmet_hsv_color, white_pct, colored_pct, crown_roi = self._check_helmet_hsv(
             head_crop, (x1, y1, x2, head_y2)
@@ -179,32 +220,56 @@ class WorkerPPEEvaluator:
         vest_hsv_pass, vest_hsv_color, vest_pct = self._check_vest_hsv(torso_crop)
 
         # 3. Hybrid Fusion: Neural YOLO + Color Classification
-        if helmet_neural:
-            helmet_pass = True
-            helmet_source = "NEURAL_YOLO"
-            # Extract color name from HSV inspection if available
-            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
-        elif helmet_hsv_pass:
-            helmet_pass = True
-            helmet_source = "HSV_DOME"
-            helmet_color = helmet_hsv_color
+        # HELMET EVALUATION:
+        # A paper carry bag, cardboard box, cloth, or hair must NEVER pass as a helmet!
+        # When dedicated neural model is loaded, NEURAL YOLO is the mandatory gatekeeper.
+        if self.ppe_model is not None:
+            if helmet_neural and helmet_neural_conf >= HELMET_CONF_THRESHOLD:
+                helmet_pass = True
+                helmet_source = "NEURAL_YOLO"
+                helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
+            else:
+                helmet_pass = False
+                helmet_source = "NONE"
+                helmet_color = "NONE"
         else:
-            helmet_pass = False
-            helmet_source = "NONE"
-            helmet_color = "NONE"
+            # Fallback ONLY when neural model is not loaded:
+            if helmet_hsv_pass:
+                helmet_pass = True
+                helmet_source = "HSV_DOME_FALLBACK"
+                helmet_color = helmet_hsv_color
+            else:
+                helmet_pass = False
+                helmet_source = "NONE"
+                helmet_color = "NONE"
 
-        if vest_neural:
-            vest_pass = True
-            vest_source = "NEURAL_YOLO"
-            vest_color = vest_hsv_color if vest_hsv_color not in ["NONE"] else "VERIFIED"
-        elif vest_hsv_pass:
-            vest_pass = True
-            vest_source = "HSV_TORSO"
-            vest_color = vest_hsv_color
-        else:
+        # VEST EVALUATION:
+        # If torso is not properly visible in frame, vest status is UNKNOWN!
+        if not torso_visible:
+            vest_status = "UNKNOWN"
+            vest_color = "NOT_VISIBLE"
+            vest_source = "OUT_OF_FRAME"
             vest_pass = False
-            vest_source = "NONE"
-            vest_color = "NONE"
+        else:
+            if self.ppe_model is not None:
+                if vest_neural and vest_neural_conf >= PPE_CONF_THRESHOLD:
+                    vest_pass = True
+                    vest_source = "NEURAL_YOLO"
+                    vest_color = vest_hsv_color if vest_hsv_color not in ["NONE"] else "VERIFIED"
+                else:
+                    vest_pass = False
+                    vest_source = "NONE"
+                    vest_color = "NONE"
+            else:
+                if vest_hsv_pass:
+                    vest_pass = True
+                    vest_source = "HSV_TORSO_FALLBACK"
+                    vest_color = vest_hsv_color
+                else:
+                    vest_pass = False
+                    vest_source = "NONE"
+                    vest_color = "NONE"
+            vest_status = "PASS" if vest_pass else "FAIL"
 
         # Apply simulation overrides if toggled by user keyboard
         if self.sim_force_helmet is not None:
@@ -215,27 +280,30 @@ class WorkerPPEEvaluator:
             vest_pass = self.sim_force_vest
             vest_color = "SIM_PASS" if vest_pass else "SIM_FAIL"
             vest_source = "KEYBOARD_SIM"
+            vest_status = "PASS" if vest_pass else "FAIL"
 
         helmet_status = "PASS" if helmet_pass else "FAIL"
-        vest_status = "PASS" if vest_pass else "FAIL"
 
-        # Check whether worker's feet/lower body are actually visible in the camera frame
-        # For laptop webcam close-ups or waist-up views, feet are NOT in the frame!
-        worker_h_pct = box_h / max(1, h)
-        worker_bottom_pct = y2 / max(1, h)
-        aspect_ratio = box_h / max(1, box_w)
-
-        # Feet are only considered visible if worker is full-body and reaches the floor
-        feet_visible = (worker_bottom_pct >= 0.88) and (worker_h_pct >= 0.65) and (aspect_ratio >= 1.65)
-
+        # Footwear Status
         if not feet_visible:
             shoes_status = "UNKNOWN"
         else:
             shoes_status = "PASS" if shoes_neural else "FAIL"
 
-        # Gloves compliance: worker without detected gloves is marked FAIL
-        gloves_status = "PASS" if gloves_neural else "FAIL"
+        # Gloves Status:
+        # If gloves detected -> PASS
+        # If hands not properly in frame -> UNKNOWN
+        # If hands are in frame but bare -> FAIL
+        if gloves_neural:
+            gloves_status = "PASS"
+        elif not hands_visible:
+            gloves_status = "UNKNOWN"
+        else:
+            gloves_status = "FAIL"
 
+        # Overall Compliance:
+        # Compliance strictly requires Helmet PASS and Vest PASS.
+        # If body is not visible (vest is UNKNOWN) or helmet failed, compliance CANNOT pass!
         is_compliant = (helmet_status == "PASS") and (vest_status == "PASS")
         confidence_score = float(max(0.85, helmet_neural_conf, vest_neural_conf))
 
@@ -281,6 +349,8 @@ class WorkerPPEEvaluator:
             "consecutive_fail_count": state["consecutive_fail"],
             "temporal_confirmed": state["consecutive_fail"] >= self.temporal_threshold,
             "should_raise_incident": should_raise_incident,
+            "body_visible": torso_visible,
+            "hands_visible": hands_visible,
             "metrics": {
                 "white_pct": white_pct,
                 "colored_pct": colored_pct,
@@ -330,25 +400,25 @@ class WorkerPPEEvaluator:
             return False, "NONE", 0.0, 0.0, crown_roi_global
 
         # High-Vis Industrial Hardhat Color Masks (Strictly isolates genuine PPE)
-        # 1. High-Vis Yellow Hardhat: H: 14-38, S: 75-255, V: 90-255
-        mask_yellow = cv2.inRange(crown_hsv, np.array([14, 75, 90]), np.array([38, 255, 255]))
+        # 1. High-Vis Yellow Hardhat: H: 18-38, S: 115-255, V: 120-255 (excludes dull brown/tan paper)
+        mask_yellow = cv2.inRange(crown_hsv, np.array([18, 115, 120]), np.array([38, 255, 255]))
 
-        # 2. High-Vis Orange Hardhat: H: 5-18, S: 85-255, V: 85-255
-        mask_orange = cv2.inRange(crown_hsv, np.array([5, 85, 85]), np.array([18, 255, 255]))
+        # 2. High-Vis Orange Hardhat: H: 6-18, S: 145-255, V: 120-255 (excludes kraft paper bag S ~ 125-135)
+        mask_orange = cv2.inRange(crown_hsv, np.array([6, 145, 120]), np.array([18, 255, 255]))
 
-        # 3. Industrial Blue Hardhat: H: 90-130, S: 75-255, V: 75-255
-        mask_blue = cv2.inRange(crown_hsv, np.array([90, 75, 75]), np.array([130, 255, 255]))
+        # 3. Industrial Blue Hardhat: H: 90-130, S: 90-255, V: 80-255
+        mask_blue = cv2.inRange(crown_hsv, np.array([90, 90, 80]), np.array([130, 255, 255]))
 
-        # 4. Industrial Red Hardhat: H: 0-8 or 170-180, S: 85-255, V: 80-255
-        mask_red1 = cv2.inRange(crown_hsv, np.array([0, 85, 80]), np.array([8, 255, 255]))
-        mask_red2 = cv2.inRange(crown_hsv, np.array([170, 85, 80]), np.array([180, 255, 255]))
+        # 4. Industrial Red Hardhat: H: 0-8 or 170-180, S: 120-255, V: 90-255
+        mask_red1 = cv2.inRange(crown_hsv, np.array([0, 120, 90]), np.array([8, 255, 255]))
+        mask_red2 = cv2.inRange(crown_hsv, np.array([170, 120, 90]), np.array([180, 255, 255]))
         mask_red = cv2.bitwise_or(mask_red1, mask_red2)
 
-        # 5. Safety Green Hardhat: H: 40-85, S: 70-255, V: 75-255
-        mask_green = cv2.inRange(crown_hsv, np.array([40, 70, 75]), np.array([85, 255, 255]))
+        # 5. Safety Green Hardhat: H: 40-85, S: 90-255, V: 85-255
+        mask_green = cv2.inRange(crown_hsv, np.array([40, 90, 85]), np.array([85, 255, 255]))
 
-        # 6. Specular White Hardhat: V >= 170, S <= 35 (Strictly requires high-brightness dome; excludes white room walls & skin tones)
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 170]), np.array([180, 35, 255]))
+        # 6. Specular White Hardhat: V >= 185, S <= 30 (Strictly requires high-brightness dome; excludes beige/kraft paper)
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 185]), np.array([180, 30, 255]))
 
         # Calculate pixel counts for each genuine hardhat color (NO DARK_CAP - black/dark hair must NEVER be counted as PPE)
         color_counts = {
@@ -371,9 +441,9 @@ class WorkerPPEEvaluator:
         best_ratio = max_pixels / crown_pixels
 
         # Decision Thresholds: Require prominent hardhat presence in skull crown ROI
-        if best_color != "WHITE" and best_ratio >= 0.28:
+        if best_color != "WHITE" and best_ratio >= 0.32:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif best_color == "WHITE" and white_ratio >= 0.38:
+        elif best_color == "WHITE" and white_ratio >= 0.40:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global
@@ -388,14 +458,14 @@ class WorkerPPEEvaluator:
         if total_pixels == 0:
             return False, "NONE", 0.0
 
-        # Neon Yellow / Lime: H: 22-45, S: 70-255, V: 80-255
-        mask_neon = cv2.inRange(hsv, np.array([22, 60, 70]), np.array([45, 255, 255]))
+        # Neon Yellow / Lime: H: 22-45, S: 85-255, V: 90-255 (fluorescent high-vis)
+        mask_neon = cv2.inRange(hsv, np.array([22, 85, 90]), np.array([45, 255, 255]))
 
-        # Hi-Vis Orange: H: 5-22, S: 80-255, V: 75-255
-        mask_orange = cv2.inRange(hsv, np.array([5, 80, 75]), np.array([22, 255, 255]))
+        # Hi-Vis Orange: H: 6-22, S: 125-255, V: 90-255 (fluorescent safety orange)
+        mask_orange = cv2.inRange(hsv, np.array([6, 125, 90]), np.array([22, 255, 255]))
 
-        # Industrial Blue Vest: H: 95-130, S: 70-255, V: 65-255
-        mask_blue = cv2.inRange(hsv, np.array([95, 70, 65]), np.array([130, 255, 255]))
+        # Industrial Blue Vest: H: 95-130, S: 105-255, V: 80-255 (high-vis reflective blue vest)
+        mask_blue = cv2.inRange(hsv, np.array([95, 105, 80]), np.array([130, 255, 255]))
 
         neon_px = cv2.countNonZero(mask_neon)
         orange_px = cv2.countNonZero(mask_orange)
@@ -405,11 +475,11 @@ class WorkerPPEEvaluator:
         orange_ratio = orange_px / total_pixels
         blue_ratio = blue_px / total_pixels
 
-        if neon_ratio >= 0.10:
+        if neon_ratio >= 0.18:
             return True, "NEON_YELLOW", neon_ratio
-        elif orange_ratio >= 0.10:
+        elif orange_ratio >= 0.18:
             return True, "HI_VIS_ORANGE", orange_ratio
-        elif blue_ratio >= 0.12:
+        elif blue_ratio >= 0.22:
             return True, "SAFETY_BLUE", blue_ratio
 
         return False, "NONE", max(neon_ratio, orange_ratio, blue_ratio)

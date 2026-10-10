@@ -210,6 +210,8 @@ class MultiCameraOrchestrator:
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
+            gloves = ppe_res.get("gloves", "UNKNOWN")
+            shoes = ppe_res.get("safety_shoes", "UNKNOWN")
             h_col = ppe_res.get("helmet_color", "NONE")
             v_col = ppe_res.get("vest_color", "NONE")
             h_src = ppe_res.get("helmet_source", "NONE")
@@ -217,7 +219,7 @@ class MultiCameraOrchestrator:
 
             box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
             lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [{worker_id}]"
-            ppe_lbl = f"H:{helmet} [{h_col}] | V:{vest} [{v_col}]"
+            ppe_lbl = f"H:{helmet} | V:{vest} | G:{gloves}"
             cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
 
             drawing_data = {
@@ -241,8 +243,8 @@ class MultiCameraOrchestrator:
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
-                    "gloves": ppe_res.get("gloves", "FAIL"),
-                    "safety_shoes": ppe_res.get("safety_shoes", "UNKNOWN"),
+                    "gloves": gloves,
+                    "safety_shoes": shoes,
                 },
                 "bbox": {
                     "x": float(round((x1 / gw) * 100, 1)),
@@ -317,11 +319,22 @@ class MultiCameraOrchestrator:
             ppe_res = self.ward_ppe_evaluator.evaluate_ppe(
                 ward_frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items
             )
-            is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
+            gloves = ppe_res.get("gloves", "UNKNOWN")
+            shoes = ppe_res.get("safety_shoes", "UNKNOWN")
             h_col = ppe_res.get("helmet_color", "NONE")
             v_col = ppe_res.get("vest_color", "NONE")
+            torso_vis = ppe_res.get("body_visible", True)
+            hands_vis = ppe_res.get("hands_visible", True)
+
+            # In CCTV 2 (Welding Zone / Elevated Production Bay), safety policy mandates:
+            # - Helmet: PASS
+            # - Vest: PASS
+            # - Gloves: PASS
+            # If body or hands are NOT shown properly (UNKNOWN) or missing (FAIL),
+            # compliance strictly CANNOT pass!
+            is_compliant = (helmet == "PASS") and (vest == "PASS") and (gloves == "PASS")
 
             if not is_compliant:
                 self.violation_counters[track_id] = self.violation_counters.get(track_id, 0) + 1
@@ -345,15 +358,29 @@ class MultiCameraOrchestrator:
             )
 
             # PPE Badge on Ward Camera
-            ppe_badge = f"H:{helmet} [{h_col}] | V:{vest} [{v_col}]"
+            ppe_badge = f"H:{helmet} | V:{vest} | G:{gloves}"
             cv2.putText(ward_frame, ppe_badge, (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
-            # Violation counter indicator
-            if not is_compliant:
+            # Partial visibility indicator or violation counter
+            if not torso_vis or not hands_vis:
+                vis_note = "PARTIAL VIEW: " + (
+                    "BODY & HANDS OUT" if (not torso_vis and not hands_vis)
+                    else ("BODY OUT OF FRAME" if not torso_vis else "HANDS OUT OF FRAME")
+                )
+                cv2.putText(
+                    ward_frame,
+                    vis_note,
+                    (x1 + 4, y1 + 34),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.36,
+                    (0, 165, 255),
+                    1,
+                )
+            elif not is_compliant:
                 cv2.putText(
                     ward_frame,
                     f"Violation: {self.violation_counters[track_id]}/15",
-                    (x1 + 4, y1 + 36),
+                    (x1 + 4, y1 + 34),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.38,
                     (0, 0, 255) if is_confirmed_viol else (0, 180, 255),
@@ -374,8 +401,8 @@ class MultiCameraOrchestrator:
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
-                    "gloves": ppe_res.get("gloves", "FAIL"),
-                    "safety_shoes": ppe_res.get("safety_shoes", "UNKNOWN"),
+                    "gloves": gloves,
+                    "safety_shoes": shoes,
                 },
                 "bbox": {
                     "x": float(round((x1 / ww) * 100, 1)),
@@ -394,7 +421,9 @@ class MultiCameraOrchestrator:
 
                 # Push Incident to Cloud Firestore
                 now_iso = datetime.utcnow().isoformat() + "Z"
-                missing_items = [item for item, st in [("HELMET", helmet), ("VEST", vest)] if st == "FAIL"]
+                missing_items = [item for item, st in [("HELMET", helmet), ("VEST", vest), ("GLOVES", gloves)] if st == "FAIL"]
+                if not missing_items and (vest == "UNKNOWN" or gloves == "UNKNOWN"):
+                    missing_items = ["BODY_OR_HANDS_NOT_IN_FRAME"]
                 incident_payload = {
                     "incident_id": f"PPE-{int(time.time()) % 1000000:06d}",
                     "facility_id": self.facility_id,
