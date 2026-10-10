@@ -182,6 +182,25 @@ class MultiCameraOrchestrator:
                         wy2 = min(gh, fy + fh + int(fh * 2.8))
                         boxes.append([wx1, wy1, wx2, wy2])
 
+        # Deduplicate heavily overlapping boxes (IoU > 0.50)
+        clean_boxes = []
+        for b in sorted(boxes, key=lambda x: (x[2] - x[0]) * (x[3] - x[1]), reverse=True):
+            bx1, by1, bx2, by2 = b
+            b_area = max(1, (bx2 - bx1) * (by2 - by1))
+            keep = True
+            for cb in clean_boxes:
+                cx1, cy1, cx2, cy2 = cb
+                ix1, iy1 = max(bx1, cx1), max(by1, cy1)
+                ix2, iy2 = min(bx2, cx2), min(by2, cy2)
+                if ix2 > ix1 and iy2 > iy1:
+                    inter = (ix2 - ix1) * (iy2 - iy1)
+                    if inter / b_area > 0.50:
+                        keep = False
+                        break
+            if keep:
+                clean_boxes.append(b)
+        boxes = clean_boxes
+
         if not boxes:
             self.cached_gate_workers = []
             self.cached_gate_drawings = []

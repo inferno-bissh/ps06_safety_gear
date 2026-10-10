@@ -230,10 +230,10 @@ const initialWorkers: WorkerTrack[] = [
     status: "ACTIVE",
     confidence: 0.96,
     ppe: {
-      helmet: "PASS",
-      vest: "PASS",
-      gloves: "PASS",
-      safety_shoes: "PASS",
+      helmet: "FAIL",
+      vest: "UNKNOWN",
+      gloves: "FAIL",
+      safety_shoes: "UNKNOWN",
     },
     bbox: {
       x: 32,
@@ -242,7 +242,7 @@ const initialWorkers: WorkerTrack[] = [
       height: 68,
       label: "Worker [TRACK_01]",
       confidence: 0.96,
-      color: "#10b981",
+      color: "#f59e0b",
     },
   },
   {
@@ -254,10 +254,10 @@ const initialWorkers: WorkerTrack[] = [
     status: "ACTIVE",
     confidence: 0.92,
     ppe: {
-      helmet: "PASS",
-      vest: "PASS",
-      gloves: "PASS",
-      safety_shoes: "PASS",
+      helmet: "FAIL",
+      vest: "UNKNOWN",
+      gloves: "FAIL",
+      safety_shoes: "UNKNOWN",
     },
     bbox: {
       x: 45,
@@ -266,7 +266,7 @@ const initialWorkers: WorkerTrack[] = [
       height: 64,
       label: "Worker [TRACK_22]",
       confidence: 0.92,
-      color: "#10b981",
+      color: "#f59e0b",
     },
   },
   {
@@ -280,7 +280,7 @@ const initialWorkers: WorkerTrack[] = [
     ppe: {
       helmet: "PASS",
       vest: "PASS",
-      gloves: "PASS",
+      gloves: "FAIL",
       safety_shoes: "PASS",
     },
     bbox: {

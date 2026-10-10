@@ -8,6 +8,7 @@ from config import (
     PPE_MODEL_PATH,
     PPE_CONF_THRESHOLD,
     HELMET_CONF_THRESHOLD,
+    GLOVES_CONF_THRESHOLD,
 )
 
 class WorkerPPEEvaluator:
@@ -146,8 +147,18 @@ class WorkerPPEEvaluator:
 
                 # Gloves: mid to lower body hands
                 elif "glove" in lbl:
-                    if (y1 + box_h * 0.25) <= icy <= (y1 + box_h * 0.95):
-                        gloves_neural = True
+                    if (y1 + box_h * 0.20) <= icy <= (y1 + box_h * 0.98):
+                        if iconf >= GLOVES_CONF_THRESHOLD:
+                            gx1, gy1, gx2, gy2 = max(0, ix1), max(0, iy1), min(w, ix2), min(h, iy2)
+                            g_crop = frame[gy1:gy2, gx1:gx2]
+                            if g_crop.size > 0:
+                                g_hsv = cv2.cvtColor(g_crop, cv2.COLOR_BGR2HSV)
+                                mask_skin = cv2.inRange(g_hsv, np.array([0, 25, 40]), np.array([28, 180, 255]))
+                                skin_ratio = cv2.countNonZero(mask_skin) / max(1, (g_crop.shape[0] * g_crop.shape[1]))
+                                # Safety gloves must NOT be bare human skin!
+                                # If skin pixels exceed 18% of hand box, it is a bare hand/wrist: reject!
+                                if skin_ratio < 0.18:
+                                    gloves_neural = True
 
                 # Goggles: near eyes/face (top 35% of worker box)
                 elif "goggle" in lbl or "glasses" in lbl:
@@ -219,29 +230,22 @@ class WorkerPPEEvaluator:
         )
         vest_hsv_pass, vest_hsv_color, vest_pct = self._check_vest_hsv(torso_crop)
 
-        # 3. Hybrid Fusion: Neural YOLO + Color Classification
+        # 3. Hybrid Fusion: Neural YOLO + Color/Dome Shell Classification
         # HELMET EVALUATION:
         # A paper carry bag, cardboard box, cloth, or hair must NEVER pass as a helmet!
-        # When dedicated neural model is loaded, NEURAL YOLO is the mandatory gatekeeper.
-        if self.ppe_model is not None:
-            if helmet_neural and helmet_neural_conf >= HELMET_CONF_THRESHOLD:
-                helmet_pass = True
-                helmet_source = "NEURAL_YOLO"
-                helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
-            else:
-                helmet_pass = False
-                helmet_source = "NONE"
-                helmet_color = "NONE"
+        # Passes if Neural YOLO detects helmet OR if hardhat shell/color inspection confirms helmet!
+        if helmet_neural and helmet_neural_conf >= HELMET_CONF_THRESHOLD:
+            helmet_pass = True
+            helmet_source = "NEURAL_YOLO"
+            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE", "PAPER_BAG"] else "VERIFIED"
+        elif helmet_hsv_pass:
+            helmet_pass = True
+            helmet_source = "HELMET_SHELL"
+            helmet_color = helmet_hsv_color
         else:
-            # Fallback ONLY when neural model is not loaded:
-            if helmet_hsv_pass:
-                helmet_pass = True
-                helmet_source = "HSV_DOME_FALLBACK"
-                helmet_color = helmet_hsv_color
-            else:
-                helmet_pass = False
-                helmet_source = "NONE"
-                helmet_color = "NONE"
+            helmet_pass = False
+            helmet_source = "NONE"
+            helmet_color = "NONE"
 
         # VEST EVALUATION:
         # If torso is not properly visible in frame, vest status is UNKNOWN!
@@ -376,11 +380,11 @@ class WorkerPPEEvaluator:
         head_h, head_w = head_crop.shape[:2]
 
         # Central Crown ROI:
-        # Horizontally: 28% to 72% of head width (the skull column, avoiding shoulder background)
-        # Vertically: 4% to 65% of head height (the helmet dome above eye level)
-        crop_w_start = int(head_w * 0.28)
-        crop_w_end = int(head_w * 0.72)
-        crop_h_start = int(head_h * 0.04)
+        # Horizontally: 22% to 78% of head width (the skull column)
+        # Vertically: 2% to 65% of head height (the helmet dome above eye level)
+        crop_w_start = int(head_w * 0.22)
+        crop_w_end = int(head_w * 0.78)
+        crop_h_start = int(head_h * 0.02)
         crop_h_end = int(head_h * 0.65)
 
         crown_roi_global = (
@@ -399,28 +403,41 @@ class WorkerPPEEvaluator:
         if crown_pixels == 0:
             return False, "NONE", 0.0, 0.0, crown_roi_global
 
-        # High-Vis Industrial Hardhat Color Masks (Strictly isolates genuine PPE)
-        # 1. High-Vis Yellow Hardhat: H: 18-38, S: 115-255, V: 120-255 (excludes dull brown/tan paper)
-        mask_yellow = cv2.inRange(crown_hsv, np.array([18, 115, 120]), np.array([38, 255, 255]))
+        mean_h = float(np.mean(crown_hsv[:, :, 0]))
+        mean_s = float(np.mean(crown_hsv[:, :, 1]))
+        mean_v = float(np.mean(crown_hsv[:, :, 2]))
 
-        # 2. High-Vis Orange Hardhat: H: 6-18, S: 145-255, V: 120-255 (excludes kraft paper bag S ~ 125-135)
-        mask_orange = cv2.inRange(crown_hsv, np.array([6, 145, 120]), np.array([18, 255, 255]))
+        # Crown micro-texture variance
+        crown_gray = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2GRAY)
+        lap_var = cv2.Laplacian(crown_gray, cv2.CV_64F).var()
 
-        # 3. Industrial Blue Hardhat: H: 90-130, S: 90-255, V: 80-255
-        mask_blue = cv2.inRange(crown_hsv, np.array([90, 90, 80]), np.array([130, 255, 255]))
+        # Bare skin tone mask (forehead / face / scalp)
+        mask_skin = cv2.inRange(crown_hsv, np.array([0, 25, 40]), np.array([25, 175, 255]))
+        skin_ratio = cv2.countNonZero(mask_skin) / max(1, crown_pixels)
 
-        # 4. Industrial Red Hardhat: H: 0-8 or 170-180, S: 120-255, V: 90-255
-        mask_red1 = cv2.inRange(crown_hsv, np.array([0, 120, 90]), np.array([8, 255, 255]))
-        mask_red2 = cv2.inRange(crown_hsv, np.array([170, 120, 90]), np.array([180, 255, 255]))
-        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+        # 1. EXPLICIT KRAFT PAPER BAG REJECTION:
+        # Kraft brown paper has characteristic Hue 12-20, Saturation 80-150, Value 100-210.
+        # Paper carry bags must NEVER be classified as a helmet!
+        is_kraft_bag = (12 <= mean_h <= 20) and (80 <= mean_s <= 150) and (100 <= mean_v <= 210)
+        if is_kraft_bag:
+            return False, "PAPER_BAG", 0.0, 0.0, crown_roi_global
 
-        # 5. Safety Green Hardhat: H: 40-85, S: 90-255, V: 85-255
-        mask_green = cv2.inRange(crown_hsv, np.array([40, 90, 85]), np.array([85, 255, 255]))
+        # 2. Reject bare face / forehead exposure (skin ratio >= 0.28)
+        if skin_ratio >= 0.28:
+            return False, "BARE_SKIN", 0.0, 0.0, crown_roi_global
 
-        # 6. Specular White Hardhat: V >= 185, S <= 30 (Strictly requires high-brightness dome; excludes beige/kraft paper)
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 185]), np.array([180, 30, 255]))
+        # 3. Check for High-Vis Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
+        mask_yellow = cv2.inRange(crown_hsv, np.array([16, 45, 75]), np.array([38, 255, 255]))
+        mask_orange = cv2.inRange(crown_hsv, np.array([5, 110, 80]), np.array([20, 255, 255]))
+        mask_blue = cv2.inRange(crown_hsv, np.array([90, 50, 55]), np.array([135, 255, 255]))
+        # Red hardhat: require high saturation or crimson hue 168-180 to avoid mistaking skin
+        mask_red = cv2.bitwise_or(
+            cv2.inRange(crown_hsv, np.array([0, 140, 75]), np.array([8, 255, 255])),
+            cv2.inRange(crown_hsv, np.array([168, 110, 75]), np.array([180, 255, 255]))
+        )
+        mask_green = cv2.inRange(crown_hsv, np.array([38, 50, 60]), np.array([88, 255, 255]))
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 115]), np.array([180, 58, 255]))
 
-        # Calculate pixel counts for each genuine hardhat color (NO DARK_CAP - black/dark hair must NEVER be counted as PPE)
         color_counts = {
             "YELLOW": cv2.countNonZero(mask_yellow),
             "ORANGE": cv2.countNonZero(mask_orange),
@@ -436,15 +453,20 @@ class WorkerPPEEvaluator:
         white_ratio = white_px / crown_pixels
         colored_ratio = colored_px / crown_pixels
 
-        # Find dominant helmet color candidate
         best_color, max_pixels = max(color_counts.items(), key=lambda item: item[1])
         best_ratio = max_pixels / crown_pixels
 
-        # Decision Thresholds: Require prominent hardhat presence in skull crown ROI
-        if best_color != "WHITE" and best_ratio >= 0.32:
+        # Authentic high-vis hardhat color detection:
+        if best_color != "WHITE" and best_ratio >= 0.20:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif best_color == "WHITE" and white_ratio >= 0.40:
+        elif best_color == "WHITE" and white_ratio >= 0.24:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
+
+        # 4. BLACK / DARK / GREY HELMET vs NATURAL BARE HAIR:
+        # Molded plastic helmets have very smooth curvature (lap_var < 260) and no skin tone.
+        # Natural bare hair has fibrous strands and follicles (lap_var >= 320).
+        if (mean_v <= 90 or mean_s <= 35) and skin_ratio < 0.15 and lap_var < 260:
+            return True, "BLACK_HELMET", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global
 
