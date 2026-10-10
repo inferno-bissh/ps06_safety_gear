@@ -93,9 +93,10 @@ class MultiCameraOrchestrator:
             self.ward_ppe_evaluator.sim_force_vest = True
             print("[PPE Engine] Demo override active: Forcing all detected personnel to PASS PPE.")
 
-        # 4. YOLO Object Detector
-        print("[AI Engine] Loading YOLOv8 nano model (yolov8n.pt)...")
-        self.model = YOLO("yolov8n.pt")
+        # 4. YOLO Object Detectors (Independent instances for Gate & Ward to maintain isolated ByteTrack trajectories)
+        print("[AI Engine] Loading YOLOv8 nano models for Gate & Ward...")
+        self.gate_model = YOLO("yolov8n.pt")
+        self.ward_model = YOLO("yolov8n.pt")
 
         # 5. Threaded Stream Ingestion
         print("[Stream Manager] Initializing decoupled camera threads...")
@@ -156,50 +157,68 @@ class MultiCameraOrchestrator:
         self.last_gate_eval_time = now
         gh, gw = gate_frame.shape[:2]
 
-        # 1. Person Detection with low threshold (0.28) for close-up webcam framing
-        results = self.model(gate_frame, classes=[0], verbose=False, conf=0.28)
+        # 1. Person Tracking with ByteTrack (persistent tracking across frames prevents ID swapping when switching sides)
+        results = self.gate_model.track(
+            gate_frame,
+            persist=True,
+            classes=[0],
+            tracker="bytetrack.yaml",
+            conf=0.25,
+            verbose=False,
+        )
         boxes = []
+        track_ids = []
+        confidences = []
         if results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int).tolist()
+            raw_b = results[0].boxes.xyxy.cpu().numpy().astype(int).tolist()
+            raw_c = results[0].boxes.conf.cpu().numpy().tolist()
+            if results[0].boxes.id is not None:
+                raw_t = results[0].boxes.id.cpu().numpy().astype(int).tolist()
+            else:
+                raw_t = [i + 1 for i in range(len(raw_b))]
 
-        # 2. Face-Anchored Fallback (ensures desk/laptop users close to camera are always detected)
+            # Non-Maximum Suppression (eliminate duplicates with IoU > 0.45)
+            for b, t, c in zip(raw_b, raw_t, raw_c):
+                bx1, by1, bx2, by2 = b
+                b_area = max(1, (bx2 - bx1) * (by2 - by1))
+                overlap = False
+                for cb in boxes:
+                    cx1, cy1, cx2, cy2 = cb
+                    ix1, iy1 = max(bx1, cx1), max(by1, cy1)
+                    ix2, iy2 = min(bx2, cx2), min(by2, cy2)
+                    if ix2 > ix1 and iy2 > iy1:
+                        inter = (ix2 - ix1) * (iy2 - iy1)
+                        if inter / b_area > 0.45:
+                            overlap = True
+                            break
+                if not overlap:
+                    boxes.append(b)
+                    track_ids.append(t)
+                    confidences.append(c)
+
+        # 2. Face Detection & Anchor Box Refinement
+        faces = None
         if self.face_engine.use_native_sface and self.face_engine.detector:
             self.face_engine.detector.setInputSize((gw, gh))
             _, faces = self.face_engine.detector.detect(gate_frame)
-            if faces is not None:
-                for f in faces:
-                    fx, fy, fw, fh = map(int, f[:4])
-                    # Check if face is already inside an existing YOLO person box
-                    is_covered = any(
-                        bx1 <= (fx + fw // 2) <= bx2 and by1 <= (fy + fh // 2) <= by2
-                        for bx1, by1, bx2, by2 in boxes
-                    )
-                    if not is_covered:
-                        # Extrapolate upper body box from face
-                        wx1 = max(0, fx - int(fw * 0.45))
-                        wy1 = max(0, fy - int(fh * 0.35))
-                        wx2 = min(gw, fx + fw + int(fw * 0.45))
-                        wy2 = min(gh, fy + fh + int(fh * 2.8))
-                        boxes.append([wx1, wy1, wx2, wy2])
 
-        # Deduplicate heavily overlapping boxes (IoU > 0.50)
-        clean_boxes = []
-        for b in sorted(boxes, key=lambda x: (x[2] - x[0]) * (x[3] - x[1]), reverse=True):
-            bx1, by1, bx2, by2 = b
-            b_area = max(1, (bx2 - bx1) * (by2 - by1))
-            keep = True
-            for cb in clean_boxes:
-                cx1, cy1, cx2, cy2 = cb
-                ix1, iy1 = max(bx1, cx1), max(by1, cy1)
-                ix2, iy2 = min(bx2, cx2), min(by2, cy2)
-                if ix2 > ix1 and iy2 > iy1:
-                    inter = (ix2 - ix1) * (iy2 - iy1)
-                    if inter / b_area > 0.50:
-                        keep = False
-                        break
-            if keep:
-                clean_boxes.append(b)
-        boxes = clean_boxes
+        # Extrapolate untracked faces if sitting very close
+        if faces is not None:
+            for f in faces:
+                fx, fy, fw, fh = map(int, f[:4])
+                is_covered = any(
+                    bx1 <= (fx + fw // 2) <= bx2 and by1 <= (fy + fh // 2) <= by2
+                    for bx1, by1, bx2, by2 in boxes
+                )
+                if not is_covered:
+                    wx1 = max(0, fx - int(fw * 0.50))
+                    wy1 = max(0, fy - int(fh * 0.70))
+                    wx2 = min(gw, fx + fw + int(fw * 0.50))
+                    wy2 = min(gh, fy + fh + int(fh * 2.5))
+                    new_id = (max(track_ids) + 1) if track_ids else 1
+                    boxes.append([wx1, wy1, wx2, wy2])
+                    track_ids.append(new_id)
+                    confidences.append(0.85)
 
         if not boxes:
             self.cached_gate_workers = []
@@ -212,15 +231,34 @@ class MultiCameraOrchestrator:
         gate_workers = []
         gate_drawings = []
 
-        for idx, box in enumerate(boxes):
+        for box, tid, conf in zip(boxes, track_ids, confidences):
             x1, y1, x2, y2 = map(int, box)
-            # Head/upper crop for facial verification
-            head_h = max(20, int((y2 - y1) * 0.40))
-            face_crop = gate_frame[y1:y1 + head_h, x1:x2]
+
+            # Match face to box to tighten coordinates and identify worker
+            matched_face = None
+            if faces is not None:
+                for f in faces:
+                    fx, fy, fw, fh = map(int, f[:4])
+                    if x1 - 30 <= (fx + fw // 2) <= x2 + 30 and y1 - 30 <= (fy + fh // 2) <= y2 + 30:
+                        matched_face = (fx, fy, fw, fh)
+                        break
+
+            if matched_face:
+                fx, fy, fw, fh = matched_face
+                # Tighten top of box to skull/helmet level (prevents drifting into ceiling or sunlit windows)
+                y1 = max(0, min(y1, fy - int(fh * 0.75)))
+                # Tighten horizontal bounds around worker
+                x1 = max(0, min(x1, fx - int(fw * 0.65)))
+                x2 = min(gw, max(x2, fx + fw + int(fw * 0.65)))
+                head_h = max(25, (fy + fh) - y1)
+                face_crop = gate_frame[max(0, fy - 10):min(gh, fy + fh + 10), max(0, fx - 10):min(gw, fx + fw + 10)]
+            else:
+                head_h = max(20, int((y2 - y1) * 0.35))
+                face_crop = gate_frame[y1:y1 + head_h, x1:x2]
 
             name, score = self.face_engine.identify_face(face_crop)
             is_verified = bool(name and name not in ["Unidentified Worker", "Unregistered Worker"])
-            worker_id = name if is_verified else f"GATE_WORKER_{idx + 1}"
+            worker_id = name if is_verified else f"GATE_WORKER_{tid:02d}"
 
             # Evaluate PPE for every detected person on Gate Camera with neural + HSV fusion!
             ppe_res = self.gate_ppe_evaluator.evaluate_ppe(
@@ -237,7 +275,7 @@ class MultiCameraOrchestrator:
             v_src = ppe_res.get("vest_source", "NONE")
 
             box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
-            lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [{worker_id}]"
+            lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [GATE_WORKER_{tid:02d}]"
             ppe_lbl = f"H:{helmet} | V:{vest} | G:{gloves}"
             cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
 
@@ -258,7 +296,7 @@ class MultiCameraOrchestrator:
                 "worker_track_id": worker_id,
                 "camera_id": "CCTV_01",
                 "zone_id": "GATE_ZONE",
-                "confidence": float(round(float(score if is_verified else 0.88), 2)),
+                "confidence": float(round(float(score if is_verified else conf), 2)),
                 "ppe": {
                     "helmet": helmet,
                     "vest": vest,
@@ -311,7 +349,7 @@ class MultiCameraOrchestrator:
             return []
 
         # Track persons with ByteTrack with optimized confidence threshold
-        results = self.model.track(
+        results = self.ward_model.track(
             ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=PERSON_CONF_THRESHOLD, verbose=False
         )
         if not results or len(results[0].boxes) == 0:

@@ -133,9 +133,9 @@ class WorkerPPEEvaluator:
                 if not (x1 - box_w * 0.15 <= icx <= x2 + box_w * 0.15):
                     continue
 
-                # Helmet: center within upper 40% of worker box or slightly above head
+                # Helmet: center within upper 45% of worker box or directly above head
                 if "helmet" in lbl:
-                    if (y1 - box_h * 0.15) <= icy <= (y1 + box_h * 0.42):
+                    if (y1 - max(50, int(box_h * 0.30))) <= icy <= (y1 + int(box_h * 0.48)):
                         helmet_neural = True
                         helmet_neural_conf = max(helmet_neural_conf, iconf)
 
@@ -379,13 +379,13 @@ class WorkerPPEEvaluator:
         gx1, gy1, gx2, gy2 = global_head_coords
         head_h, head_w = head_crop.shape[:2]
 
-        # Central Crown ROI:
-        # Horizontally: 22% to 78% of head width (the skull column)
-        # Vertically: 2% to 65% of head height (the helmet dome above eye level)
-        crop_w_start = int(head_w * 0.22)
-        crop_w_end = int(head_w * 0.78)
+        # Central Crown ROI centered on skull axis:
+        center_x = head_w // 2
+        half_w = max(12, int(head_w * 0.18))
+        crop_w_start = max(0, center_x - half_w)
+        crop_w_end = min(head_w, center_x + half_w)
         crop_h_start = int(head_h * 0.02)
-        crop_h_end = int(head_h * 0.65)
+        crop_h_end = int(head_h * 0.60)
 
         crown_roi_global = (
             gx1 + crop_w_start,
@@ -411,8 +411,14 @@ class WorkerPPEEvaluator:
         crown_gray = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2GRAY)
         lap_var = cv2.Laplacian(crown_gray, cv2.CV_64F).var()
 
+        # 0. NATURAL HAIR FIBER TEXTURE REJECTION:
+        # Natural human hair always exhibits high micro-texture variance from strands and follicles (lap_var >= 280).
+        # Genuine plastic hardhat shells or motorcycle helmets have smooth molded surfaces (lap_var < 260).
+        if lap_var >= 280:
+            return False, "HAIR_TEXTURE", 0.0, 0.0, crown_roi_global
+
         # Bare skin tone mask (forehead / face / scalp)
-        mask_skin = cv2.inRange(crown_hsv, np.array([0, 25, 40]), np.array([25, 175, 255]))
+        mask_skin = cv2.inRange(crown_hsv, np.array([0, 25, 40]), np.array([28, 180, 255]))
         skin_ratio = cv2.countNonZero(mask_skin) / max(1, crown_pixels)
 
         # 1. EXPLICIT KRAFT PAPER BAG REJECTION:
@@ -422,8 +428,8 @@ class WorkerPPEEvaluator:
         if is_kraft_bag:
             return False, "PAPER_BAG", 0.0, 0.0, crown_roi_global
 
-        # 2. Reject bare face / forehead exposure (skin ratio >= 0.28)
-        if skin_ratio >= 0.28:
+        # 2. Reject bare face / forehead exposure (skin ratio >= 0.22)
+        if skin_ratio >= 0.22:
             return False, "BARE_SKIN", 0.0, 0.0, crown_roi_global
 
         # 3. Check for High-Vis Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
@@ -436,7 +442,7 @@ class WorkerPPEEvaluator:
             cv2.inRange(crown_hsv, np.array([168, 110, 75]), np.array([180, 255, 255]))
         )
         mask_green = cv2.inRange(crown_hsv, np.array([38, 50, 60]), np.array([88, 255, 255]))
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 115]), np.array([180, 58, 255]))
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 130]), np.array([180, 50, 255]))
 
         color_counts = {
             "YELLOW": cv2.countNonZero(mask_yellow),
@@ -456,16 +462,15 @@ class WorkerPPEEvaluator:
         best_color, max_pixels = max(color_counts.items(), key=lambda item: item[1])
         best_ratio = max_pixels / crown_pixels
 
-        # Authentic high-vis hardhat color detection:
-        if best_color != "WHITE" and best_ratio >= 0.20:
+        # Authentic high-vis hardhat color detection on smooth plastic dome:
+        if best_color != "WHITE" and best_ratio >= 0.20 and lap_var < 260:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif best_color == "WHITE" and white_ratio >= 0.24:
+        elif best_color == "WHITE" and white_ratio >= 0.28 and lap_var < 220:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
 
         # 4. BLACK / DARK / GREY HELMET vs NATURAL BARE HAIR:
-        # Molded plastic helmets have very smooth curvature (lap_var < 260) and no skin tone.
-        # Natural bare hair has fibrous strands and follicles (lap_var >= 320).
-        if (mean_v <= 90 or mean_s <= 35) and skin_ratio < 0.15 and lap_var < 260:
+        # Molded plastic helmets have very smooth curvature (lap_var < 240) and no skin tone.
+        if (mean_v <= 90 or mean_s <= 35) and skin_ratio < 0.15 and lap_var < 240:
             return True, "BLACK_HELMET", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global

@@ -540,14 +540,42 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-10 (Session 31)
+- **Agent Focus:** CCTV 1 Helmet Inversion Fix (Window Glare Texture Filter & Vertical Alignment), ByteTrack Persistent Multi-Person Tracking on Webcam (Eliminating Worker Number Swapping on Side Switches), and Face-Anchored AI Box Tightening.
+- **Key Decisions & Accomplishments:**
+  - **Eliminated Worker Number Reversal When Switching Sides (CCTV 1):**
+    - *Root cause:* `process_gate_stream` previously ran raw YOLO detection without a motion tracker and assigned IDs by sorting bounding box areas: `GATE_WORKER_{idx + 1}`. When two workers switched positions or leaned forward, their IDs and historical PPE states flipped.
+    - *Fix:* Integrated **ByteTrack persistent tracking** on CCTV 1:
+      1. Initialized independent `self.gate_model` and `self.ward_model` YOLO instances in [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py) so Gate and Ward Kalman tracking states remain isolated.
+      2. Called `self.gate_model.track(gate_frame, persist=True, tracker="bytetrack.yaml")`.
+      3. Workers are assigned stable IDs: `Worker [GATE_WORKER_{tid:02d}]` (or their enrolled name via facial recognition). When workers walk across the room or switch sides, ByteTrack maintains continuous spatial trajectories. Worker 1 stays Worker 1, and Worker 2 stays Worker 2!
+  - **Fixed Helmet Inversion (Bare Head False PASS & Helmet Failing):**
+    - *Root cause (Bare Head Passing):* The left worker sat directly under a sunlit white window. In seated webcam framing, YOLO's person box expanded upward into the wall/window. The crown ROI sampled across 22%-78% of the box width, capturing the bright white window. `_check_helmet_hsv` awarded `best_color == "WHITE"` with `white_ratio = 0.64` without verifying surface smoothness (`lap_var`), causing a false pass on window glare!
+    - *Fix:*
+      1. Centered crown crop strictly on the central skull column (`head_w // 2 ± 18%`), avoiding background windows.
+      2. Implemented **mandatory micro-texture rejection** in `_check_helmet_hsv`: natural human hair always has fibrous strands and follicles (`lap_var >= 280`, measured at ~730 on the live user), whereas molded plastic hardhat shells have smooth surfaces (`lap_var < 260`). If `lap_var >= 280`, it is immediately rejected as `HAIR_TEXTURE`.
+      3. White hardhats strictly require `white_ratio >= 0.28 AND lap_var < 220` (smooth white dome). Sunlit window glare and bare hair can NEVER pass!
+    - *Root cause (Friend's Helmet Failing):* Close-up webcam framing placed the friend's helmet center vertically above `y1`, exceeding the previous tight vertical margin `(y1 - box_h * 0.15)`.
+    - *Fix:* Expanded the vertical alignment window in [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py): `(y1 - max(50, int(box_h * 0.30))) <= icy <= (y1 + int(box_h * 0.48))` so helmets on the head are reliably matched to the worker.
+  - **Refined AI Bounding Boxes Around Seated Workers:**
+    - Used YuNet face anchors to clamp oversized YOLO boxes: `y1 = max(0, min(y1, fy - int(fh * 0.75)))` (cuts off windows, ceiling, and coat hooks) and horizontal boundaries `[fx - 0.65*fw, fx + 1.65*fw]`. Bounding boxes now tightly and cleanly fit each worker's actual body.
+  - **Process Lifecycle & Live Verification:**
+    - Cleanly restarted background daemon on port 5000 (task-1331).
+    - Verified live stream overlay and telemetry: bare-headed user correctly evaluates as `H:FAIL | V:UNKNOWN | G:UNKNOWN`. No more false white helmet pass from window glare.
+    - Worker numbers maintain tracking across frame movements.
+    - Verified `npx tsc --noEmit` in `dashboard/` with 0 type errors.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
 1. **Operations Console Dashboard:** [http://localhost:3000](http://localhost:3000) (Overview) and [http://localhost:3000/cameras](http://localhost:3000/cameras) (Multi-CCTV Wall).
-2. **Testing Live PPE Compliance:**
-   - **Helmet Test:** Putting on any industrial helmet (Yellow, White, Orange, Blue, Red, Green, or Black/Dark helmet) immediately evaluates to **`Helmet: PASS`** (green HUD box). Natural hair or paper bags continue to evaluate as **`FAIL`**.
-   - **Gloves Test:** Bare hands or hands out of frame evaluate to **`Gloves: FAIL`** or **`UNKNOWN`**; never false PASS. Wearing safety gloves (e.g. blue nitrile, neon work gloves) evaluates to **`Gloves: PASS`**.
+2. **Testing Live PPE Compliance & Side Switching:**
+   - **Side Switching Test:** Have both workers switch sides in front of the laptop webcam (CCTV 1). ByteTrack tracks their motion paths so Worker 1 remains `GATE_WORKER_01` and Worker 2 remains `GATE_WORKER_02`.
+   - **Helmet Test:** Wearing a helmet evaluates to **`Helmet: PASS`** (green crown ROI box). Natural bare hair (even under bright window glare) evaluates to **`Helmet: FAIL`** (orange warning box) due to the Laplacian texture filter (`lap_var >= 280`).
+   - **Gloves Test:** Bare hands or hands out of frame evaluate to **`Gloves: FAIL`** or **`UNKNOWN`**; only certified protective gloves award **`Gloves: PASS`**.
 3. **Multi-Camera Feeds:** Both CCTV 1 (webcam) and CCTV 2 (phone stream `http://192.168.1.5:8080/video`) stream live via `http://localhost:5000/video/cctv1` and `http://localhost:5000/video/cctv2`.
 
 
