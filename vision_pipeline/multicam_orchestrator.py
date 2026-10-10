@@ -509,85 +509,89 @@ class MultiCameraOrchestrator:
         prev_time = time.time()
 
         while True:
-            frame_idx += 1
-            now = time.time()
-            fps = 1.0 / max(0.001, (now - prev_time))
-            prev_time = now
+            try:
+                frame_idx += 1
+                now = time.time()
+                fps = 1.0 / max(0.001, (now - prev_time))
+                prev_time = now
 
-            # 1. Fetch latest frames from decoupled stream threads
-            gate_frame, _ = self.gate_stream.get_latest_frame()
-            ward_frame, _ = self.ward_stream.get_latest_frame()
+                # 1. Fetch latest frames from decoupled stream threads
+                gate_frame, _ = self.gate_stream.get_latest_frame()
+                ward_frame, _ = self.ward_stream.get_latest_frame()
 
-            if gate_frame is None or ward_frame is None:
-                time.sleep(0.02)
-                continue
+                if gate_frame is None or ward_frame is None:
+                    time.sleep(0.02)
+                    continue
 
-            # 2. Process Gate stream (Entry access verification & PPE)
-            gate_workers = self.process_gate_stream(gate_frame) or []
+                # 2. Process Gate stream (Entry access verification & PPE)
+                gate_workers = self.process_gate_stream(gate_frame) or []
 
-            # 3. Process Ward stream (PPE tracking & event-driven alert)
-            ward_workers = self.process_ward_stream(ward_frame) or []
+                # 3. Process Ward stream (PPE tracking & event-driven alert)
+                ward_workers = self.process_ward_stream(ward_frame) or []
 
-            # Broadcast live worker tracking telemetry for dashboard
-            if not self.test_mode:
-                self.web_broadcaster.update_workers(gate_workers + ward_workers)
+                # Broadcast live worker tracking telemetry for dashboard
+                if not self.test_mode:
+                    self.web_broadcaster.update_workers(gate_workers + ward_workers)
 
-            # 4. Render Dual-Stream Composite Tactical Display
-            h_sub, w_sub = 360, 640
-            gate_resized = cv2.resize(gate_frame, (w_sub, h_sub))
-            ward_resized = cv2.resize(ward_frame, (w_sub, h_sub))
+                # 4. Render Dual-Stream Composite Tactical Display
+                h_sub, w_sub = 360, 640
+                gate_resized = cv2.resize(gate_frame, (w_sub, h_sub))
+                ward_resized = cv2.resize(ward_frame, (w_sub, h_sub))
 
-            # Header bars on crops
-            cv2.rectangle(gate_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
-            cv2.putText(gate_resized, "[CCTV 1] GATE CHOKE-POINT (Laptop Cam)", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1)
+                # Header bars on crops
+                cv2.rectangle(gate_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
+                cv2.putText(gate_resized, "[CCTV 1] GATE CHOKE-POINT (Laptop Cam)", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1)
 
-            cv2.rectangle(ward_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
-            cv2.putText(ward_resized, f"[CCTV 2] PRODUCTION BAY (Front View) - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
+                cv2.rectangle(ward_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
+                cv2.putText(ward_resized, f"[CCTV 2] PRODUCTION BAY (Front View) - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
 
-            composite = np.hstack([gate_resized, ward_resized])
+                composite = np.hstack([gate_resized, ward_resized])
 
-            # Bottom Status Bar
-            footer_h = 45
-            footer = np.zeros((footer_h, composite.shape[1], 3), dtype=np.uint8)
-            footer[:] = (15, 20, 28)
-            active_list = ", ".join(self.active_checked_in_workers.keys()) or "None"
-            total_active_workers = len(gate_workers) + len(ward_workers)
-            cv2.putText(footer, f"FPS: {fps:.1f} | TRACKED WORKERS: {total_active_workers} | PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 220, 240), 1)
+                # Bottom Status Bar
+                footer_h = 45
+                footer = np.zeros((footer_h, composite.shape[1], 3), dtype=np.uint8)
+                footer[:] = (15, 20, 28)
+                active_list = ", ".join(self.active_checked_in_workers.keys()) or "None"
+                total_active_workers = len(gate_workers) + len(ward_workers)
+                cv2.putText(footer, f"FPS: {fps:.1f} | TRACKED WORKERS: {total_active_workers} | PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 220, 240), 1)
 
-            display_view = np.vstack([composite, footer])
+                display_view = np.vstack([composite, footer])
 
-            # 5. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
-            if not self.test_mode:
-                self.web_broadcaster.update_frame("cctv1", gate_resized)
-                self.web_broadcaster.update_frame("cctv2", ward_resized)
-                self.web_broadcaster.update_frame("composite", display_view)
-                if self.cctv3_stream:
-                    f3, _ = self.cctv3_stream.get_latest_frame()
-                    if f3 is not None:
-                        self.web_broadcaster.update_frame("cctv3", f3)
-                if self.cctv4_stream:
-                    f4, _ = self.cctv4_stream.get_latest_frame()
-                    if f4 is not None:
-                        self.web_broadcaster.update_frame("cctv4", f4)
+                # 5. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
+                if not self.test_mode:
+                    self.web_broadcaster.update_frame("cctv1", gate_resized)
+                    self.web_broadcaster.update_frame("cctv2", ward_resized)
+                    self.web_broadcaster.update_frame("composite", display_view)
+                    if self.cctv3_stream:
+                        f3, _ = self.cctv3_stream.get_latest_frame()
+                        if f3 is not None:
+                            self.web_broadcaster.update_frame("cctv3", f3)
+                    if self.cctv4_stream:
+                        f4, _ = self.cctv4_stream.get_latest_frame()
+                        if f4 is not None:
+                            self.web_broadcaster.update_frame("cctv4", f4)
 
-            # In test mode, exit after 40 frames without GUI rendering
-            if self.test_mode:
-                if frame_idx >= 40:
-                    print(f"[Test Mode] Completed {frame_idx} orchestrator frames successfully.")
-                    break
-                time.sleep(0.01)
-                continue
-
-            if not self.no_gui:
-                try:
-                    cv2.imshow("SafetyIntel CCTV Operations Console", display_view)
-                    k = cv2.waitKey(1) & 0xFF
-                    if k == ord('q'):
+                # In test mode, exit after 40 frames without GUI rendering
+                if self.test_mode:
+                    if frame_idx >= 40:
+                        print(f"[Test Mode] Completed {frame_idx} orchestrator frames successfully.")
                         break
-                except Exception:
                     time.sleep(0.01)
-            else:
-                time.sleep(0.01)
+                    continue
+
+                if not self.no_gui:
+                    try:
+                        cv2.imshow("SafetyIntel CCTV Operations Console", display_view)
+                        k = cv2.waitKey(1) & 0xFF
+                        if k == ord('q'):
+                            break
+                    except Exception:
+                        time.sleep(0.01)
+                else:
+                    time.sleep(0.01)
+            except Exception as e:
+                print(f"[Orchestrator Warning] Error in main loop: {e}")
+                time.sleep(0.05)
 
         self.gate_stream.stop()
         self.ward_stream.stop()
