@@ -15,11 +15,12 @@ import {
   Activity,
   Sliders,
   Flame,
+  AlertTriangle,
 } from "lucide-react";
 
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
-  const { incidents, zones } = useSafety();
+  const { incidents, zones, liveHazard } = useSafety();
 
   const openIncidents = incidents.filter((i) => i.status !== "RESOLVED");
   const p3Count = openIncidents.filter((i) => i.priority === "P3").length;
@@ -80,9 +81,9 @@ export const Sidebar: React.FC = () => {
   ];
 
   return (
-    <aside className="w-60 bg-[#121821] border-r border-[#26303C] flex flex-col justify-between shrink-0 h-[calc(100vh-80px)] sticky top-[80px]">
-      <div className="py-3 px-2 flex flex-col gap-1">
-        <div className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+    <aside className="w-64 bg-[#121821] border-r border-[#26303C] flex flex-col justify-between shrink-0 h-[calc(100vh-80px)] sticky top-[80px]">
+      <div className="py-3.5 px-2.5 flex flex-col gap-1.5">
+        <div className="px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
           Navigation
         </div>
 
@@ -95,20 +96,20 @@ export const Sidebar: React.FC = () => {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center justify-between px-3 py-2 rounded text-xs font-medium transition-colors font-mono",
+                "flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold transition-all min-h-[40px] active:scale-[0.98]",
                 isActive
-                  ? "bg-blue-600/15 text-blue-400 border border-blue-500/30 font-bold"
+                  ? "bg-blue-600/15 text-blue-400 border border-blue-500/30 font-bold shadow-xs"
                   : "text-slate-300 hover:bg-[#1A222C] hover:text-slate-100"
               )}
             >
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-3">
                 <Icon className={cn("w-4 h-4", isActive ? "text-blue-400" : "text-slate-400")} />
                 <span>{item.label}</span>
               </div>
               {item.badge && (
                 <span
                   className={cn(
-                    "text-[10px] px-1.5 py-0.2 rounded font-mono font-semibold",
+                    "text-[11px] px-2 py-0.5 rounded-md font-mono font-bold",
                     item.badgeColor || "bg-slate-800 text-slate-300 border border-slate-700"
                   )}
                 >
@@ -124,12 +125,14 @@ export const Sidebar: React.FC = () => {
       <div className="p-3 border-t border-[#26303C] bg-[#0E131A] text-xs font-mono">
         <div className="flex items-center justify-between text-slate-400 mb-1.5 text-[11px]">
           <span>Hazard Status:</span>
-          {p3Count > 0 ? (
-            <span className="text-red-400 font-bold flex items-center gap-1">
-              <Flame className="w-3 h-3 text-red-500 animate-pulse" /> P3 ACTIVE
+          {p3Count > 0 || liveHazard?.fire ? (
+            <span className="text-red-400 font-bold flex items-center gap-1 animate-pulse">
+              <Flame className="w-3.5 h-3.5 text-red-500 animate-bounce" /> P3 ACTIVE (FIRE)
             </span>
-          ) : p2Count > 0 ? (
-            <span className="text-orange-400 font-bold">P2 WARNING</span>
+          ) : p2Count > 0 || liveHazard?.smoke ? (
+            <span className="text-orange-400 font-bold flex items-center gap-1 animate-pulse">
+              <AlertTriangle className="w-3.5 h-3.5 text-orange-400" /> P2 WARNING (SMOKE)
+            </span>
           ) : p1Count > 0 ? (
             <span className="text-amber-400 font-bold">P1 PPE ALERT</span>
           ) : (

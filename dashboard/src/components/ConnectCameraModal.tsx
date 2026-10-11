@@ -241,20 +241,20 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
             <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
               Target Camera Slot:
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {cameras.map((c) => (
                 <button
                   key={c.camera_id}
                   onClick={() => setSelectedCamId(c.camera_id)}
                   className={cn(
-                    "p-2 rounded-lg border text-left flex flex-col transition-all",
+                    "p-2.5 rounded-xl border text-left flex flex-col justify-between transition-all min-h-[52px] active:scale-95",
                     selectedCamId === c.camera_id
-                      ? "border-blue-500 bg-blue-600/15 text-white ring-1 ring-blue-500/50"
-                      : "border-slate-800 bg-[#121821] text-slate-400 hover:border-slate-700"
+                      ? "border-blue-500 bg-blue-600/20 text-white ring-2 ring-blue-500/50 shadow-sm"
+                      : "border-slate-800 bg-[#121821] text-slate-400 hover:border-slate-700 hover:text-slate-300"
                   )}
                 >
                   <span className="font-bold text-xs truncate">{c.camera_id}</span>
-                  <span className="text-[10px] text-slate-400 truncate mt-0.5">
+                  <span className="text-[11px] text-slate-400 truncate mt-0.5">
                     {c.role || c.name.split("—")[1] || "Camera"}
                   </span>
                 </button>
@@ -288,60 +288,60 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
                 </span>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2.5">
               <input
                 type="text"
                 value={ipInput}
                 onChange={(e) => setIpInput(e.target.value)}
-                className="flex-1 bg-[#161F2B] border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-slate-100 font-mono outline-none transition-colors"
+                className="flex-1 bg-[#161F2B] border border-slate-700 focus:border-blue-500 rounded-lg px-3.5 py-2.5 text-slate-100 font-mono outline-none transition-colors text-xs sm:text-sm"
                 placeholder="192.168.1.5 or http://192.168.1.5:8080/video"
               />
               <button
                 onClick={handleTestConnection}
                 disabled={isTesting || !ipInput.trim()}
-                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap"
+                className="h-11 px-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white font-bold rounded-lg transition-all flex items-center gap-2 whitespace-nowrap shadow-md shadow-blue-900/30 active:scale-95 text-xs sm:text-sm"
               >
                 {isTesting ? (
                   <span className="animate-spin">⏳</span>
                 ) : (
-                  <Radio className="w-3.5 h-3.5" />
+                  <Radio className="w-4 h-4" />
                 )}
                 <span>Test Link</span>
               </button>
             </div>
 
             {/* Quick Presets */}
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              <span className="text-[10px] text-slate-500">Quick Presets:</span>
+            <div className="flex flex-wrap items-center gap-2 mt-2.5">
+              <span className="text-xs text-slate-400 font-semibold">Quick Presets:</span>
               <button
                 onClick={() => setIpInput("192.168.1.5:8080")}
-                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                className="text-xs bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
                 title="Android IP Webcam default port"
               >
-                <Smartphone className="w-2.5 h-2.5 text-blue-400" />
+                <Smartphone className="w-3.5 h-3.5 text-blue-400" />
                 <span>IP Webcam (:8080)</span>
               </button>
               <button
                 onClick={() => setIpInput("192.168.1.5:4747")}
-                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                className="text-xs bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
                 title="DroidCam default port"
               >
-                <Smartphone className="w-2.5 h-2.5 text-cyan-400" />
+                <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
                 <span>DroidCam (:4747)</span>
               </button>
               <button
                 onClick={() => setIpInput("0")}
-                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                className="text-xs bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
               >
-                <Laptop className="w-2.5 h-2.5 text-emerald-400" />
+                <Laptop className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Laptop Webcam (0)</span>
               </button>
               <button
                 onClick={() => setIpInput("1")}
-                className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1"
+                className="text-xs bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-medium transition-colors"
               >
-                <Laptop className="w-2.5 h-2.5 text-purple-400" />
-                <span>USB / Iriun Cam (1)</span>
+                <Laptop className="w-3.5 h-3.5 text-purple-400" />
+                <span>USB Cam (1)</span>
               </button>
             </div>
 
@@ -414,20 +414,20 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="bg-[#121821] px-5 py-3 border-t border-[#26303C] flex items-center justify-between">
+        <div className="bg-[#121821] px-6 py-4 border-t border-[#26303C] flex items-center justify-between">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-slate-800 transition-colors"
+            className="h-11 px-5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors font-semibold text-xs sm:text-sm"
           >
             Cancel
           </button>
           <button
             onClick={handleSaveAndConnect}
             disabled={isSaving || !cameraName.trim() || !normalizedStreamUrl}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-md shadow-emerald-950/40"
+            className="h-11 px-6 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-extrabold rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-emerald-950/50 active:scale-95 text-xs sm:text-sm"
           >
-            {isSaving ? <span className="animate-spin">⏳</span> : <Check className="w-4 h-4" />}
-            <span>Save & Connect Camera</span>
+            {isSaving ? <span className="animate-spin">⏳</span> : <Check className="w-4 h-4 stroke-[2.5]" />}
+            <span>Save &amp; Connect Camera</span>
           </button>
         </div>
       </div>

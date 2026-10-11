@@ -183,21 +183,22 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     <div
       className={cn(
         "rounded-lg overflow-hidden border border-[#26303C] bg-[#0E131A] font-mono flex flex-col shadow-lg transition-all",
-        hasFireHazard && "border-red-600 ring-2 ring-red-500/40",
+        hasFireHazard && "border-red-600 ring-2 ring-red-500/50 shadow-red-950/40 animate-pulse",
+        !hasFireHazard && hasSmokeHazard && "border-amber-500 ring-2 ring-amber-500/50 shadow-amber-950/40",
         className
       )}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Stream Header */}
-      <div className="bg-[#161F2B] px-3 py-2 border-b border-[#26303C] flex items-center justify-between text-xs">
+      <div className="bg-[#161F2B] px-3.5 py-2.5 border-b border-[#26303C] flex items-center justify-between text-xs">
         {isEditingName ? (
-          <div className="flex items-center gap-1.5 flex-1 max-w-sm">
+          <div className="flex items-center gap-2 flex-1 max-w-sm">
             <input
               type="text"
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
-              className="bg-slate-900 border border-blue-500 text-slate-100 text-xs px-2 py-0.5 rounded outline-none w-full"
+              className="bg-slate-900 border border-blue-500 text-slate-100 text-xs px-2.5 py-1 rounded-md outline-none w-full"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSaveName();
@@ -210,28 +211,28 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             <button
               onClick={handleSaveName}
               disabled={isSaving}
-              className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white"
+              className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
               title="Save Camera Name"
             >
-              <Check className="w-3 h-3" />
+              <Check className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => {
                 setEditedName(camera.name);
                 setIsEditingName(false);
               }}
-              className="p-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300"
+              className="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
               title="Cancel"
             >
-              <X className="w-3 h-3" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-            <span className="font-bold text-slate-100">{camera.name}</span>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+            <span className="font-extrabold text-sm text-slate-100">{camera.name}</span>
             {camera.role && (
-              <span className="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded border border-blue-500/30">
+              <span className="text-[11px] font-semibold bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-md border border-blue-500/30">
                 {camera.role}
               </span>
             )}
@@ -240,41 +241,51 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 setEditedName(camera.name);
                 setIsEditingName(true);
               }}
-              className="p-1 text-slate-500 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+              className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-md transition-colors"
               title="Admin: Rename Camera"
             >
-              <Pencil className="w-3 h-3" />
+              <Pencil className="w-3.5 h-3.5" />
             </button>
             {onConnectIp && (
               <button
                 onClick={() => onConnectIp(camera)}
-                className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 hover:text-blue-200 border border-blue-500/40 rounded transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 hover:text-blue-200 border border-blue-500/40 rounded-lg transition-all min-h-[30px]"
                 title="Connect Phone / IP Camera (+)"
               >
-                <Plus className="w-3 h-3 text-blue-400 stroke-[2.5]" />
-                <span className="text-[10px] font-bold">IP</span>
+                <Plus className="w-3.5 h-3.5 text-blue-400 stroke-[2.5]" />
+                <span>IP Stream</span>
               </button>
             )}
-            <span className="text-slate-400 text-[11px] font-mono-tabular">({camera.camera_id})</span>
+            <span className="text-slate-400 text-xs font-mono-tabular">({camera.camera_id})</span>
+            {hasFireHazard && (
+              <span className="flex items-center gap-1 text-[11px] font-extrabold bg-red-600/30 text-red-300 border border-red-500/60 px-2 py-0.5 rounded-md animate-pulse">
+                <Flame className="w-3.5 h-3.5 text-red-400" /> FIRE [P3]
+              </span>
+            )}
+            {!hasFireHazard && hasSmokeHazard && (
+              <span className="flex items-center gap-1 text-[11px] font-extrabold bg-orange-500/30 text-orange-300 border border-orange-500/60 px-2 py-0.5 rounded-md animate-pulse">
+                <AlertCircle className="w-3.5 h-3.5 text-orange-400" /> SMOKE [P2]
+              </span>
+            )}
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={() => setShowOverlay(!showOverlay)}
             className={cn(
-              "px-2 py-0.5 rounded text-[11px] border flex items-center gap-1 transition-colors",
+              "px-3 py-1.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-all min-h-[30px]",
               showOverlay
-                ? "bg-blue-600/20 text-blue-400 border-blue-500/40"
-                : "bg-slate-800 text-slate-400 border-slate-700"
+                ? "bg-blue-600/20 text-blue-300 border-blue-500/50 shadow-sm"
+                : "bg-slate-800/80 text-slate-400 border-slate-700 hover:bg-slate-700"
             )}
             title="Toggle YOLOv8 AI inference bounding boxes"
           >
-            <Layers className="w-3 h-3" />
+            <Layers className="w-3.5 h-3.5" />
             <span>AI Overlay {showOverlay ? "ON" : "OFF"}</span>
           </button>
 
-          <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono-tabular">
+          <span className="text-[11px] bg-slate-800/80 text-slate-300 px-2 py-1 rounded-md font-mono-tabular font-semibold border border-slate-700/60">
             {camera.fps} FPS · {camera.resolution}
           </span>
         </div>
@@ -289,30 +300,30 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             <p className="text-xs text-slate-500 max-w-xs mx-auto">
               Camera is currently offline. Connect an IP stream or start the AI Vision Engine.
             </p>
-            <div className="flex items-center gap-2 pt-1 justify-center flex-wrap">
+            <div className="flex items-center gap-2.5 pt-2 justify-center flex-wrap">
               {onConnectIp && (
                 <button
                   onClick={() => onConnectIp(camera)}
-                  className="px-2.5 py-1 text-[11px] bg-blue-600 hover:bg-blue-500 text-white rounded font-bold transition-colors flex items-center gap-1 shadow-sm shadow-blue-500/20"
+                  className="px-3.5 py-2 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition-all flex items-center gap-1.5 shadow-md shadow-blue-500/25 min-h-[36px] active:scale-95"
                 >
-                  <Plus className="w-3 h-3 stroke-[2.5]" /> Connect IP Stream
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" /> <span>Connect IP Stream</span>
                 </button>
               )}
               <button
                 onClick={handleStartEngine}
                 disabled={isStartingEngine}
-                className="px-2.5 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded font-medium transition-colors flex items-center gap-1"
+                className="px-3.5 py-2 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-lg font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-900/40 min-h-[36px] active:scale-95"
               >
                 {isStartingEngine ? (
-                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Play className="w-3 h-3 fill-current" />
+                  <Play className="w-3.5 h-3.5 fill-current" />
                 )}
                 <span>Start AI Engine</span>
               </button>
               <button
                 onClick={() => setShowFallbackSim(true)}
-                className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium transition-colors border border-slate-700"
+                className="px-3.5 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-semibold transition-all border border-slate-700 min-h-[36px] active:scale-95"
               >
                 Demo Feed
               </button>
@@ -488,28 +499,28 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 <div className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1 font-mono text-[10px] text-emerald-400 select-all max-w-sm truncate">
                   python vision_pipeline/multicam_orchestrator.py
                 </div>
-                <div className="flex items-center gap-2 pt-1 flex-wrap justify-center">
+                <div className="flex items-center gap-2.5 pt-2 flex-wrap justify-center">
                   <button
                     onClick={handleStartEngine}
                     disabled={isStartingEngine}
-                    className="px-2.5 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded font-bold transition-colors flex items-center gap-1 shadow-sm shadow-emerald-500/20"
+                    className="px-3.5 py-2 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-lg font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-500/20 min-h-[36px] active:scale-95"
                   >
                     {isStartingEngine ? (
                       <>
-                        <RefreshCw className="w-3 h-3 animate-spin" /> Starting AI Engine...
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Starting AI Engine...
                       </>
                     ) : (
                       <>
-                        <Play className="w-3 h-3 fill-current" /> Start AI Vision Engine
+                        <Play className="w-3.5 h-3.5 fill-current" /> Start AI Vision Engine
                       </>
                     )}
                   </button>
                   {onConnectIp && (
                     <button
                       onClick={() => onConnectIp(camera)}
-                      className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-medium transition-colors flex items-center gap-1 border border-slate-700"
+                      className="px-3.5 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-semibold transition-all flex items-center gap-1.5 border border-slate-700 min-h-[36px] active:scale-95"
                     >
-                      <Plus className="w-3 h-3 stroke-[2.5]" /> Connect IP Stream
+                      <Plus className="w-3.5 h-3.5 stroke-[2.5]" /> Connect IP Stream
                     </button>
                   )}
                   <button
@@ -517,13 +528,13 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                       setStreamError(false);
                       setStreamKey((k) => k + 1);
                     }}
-                    className="px-2.5 py-1 text-[11px] bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition-colors flex items-center gap-1"
+                    className="px-3.5 py-2 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-all flex items-center gap-1.5 min-h-[36px] active:scale-95 shadow-sm shadow-blue-500/20"
                   >
-                    <RefreshCw className="w-3 h-3" /> Retry Stream
+                    <RefreshCw className="w-3.5 h-3.5" /> Retry Stream
                   </button>
                   <button
                     onClick={() => setShowFallbackSim(true)}
-                    className="px-2.5 py-1 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium transition-colors border border-slate-700"
+                    className="px-3.5 py-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-semibold transition-all border border-slate-700 min-h-[36px] active:scale-95"
                   >
                     Show Demo Feed
                   </button>

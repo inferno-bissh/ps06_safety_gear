@@ -1,0 +1,12 @@
+{
+  "include": [
+    "vision_pipeline",
+    "scratch"
+  ],
+  "extraPaths": [
+    "C:/Users/dehur/AppData/Roaming/Python/Python314/site-packages",
+    "vision_pipeline"
+  ],
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Windows"
+}

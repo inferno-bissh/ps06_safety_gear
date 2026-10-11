@@ -21,6 +21,8 @@ ENV/
 # Large model weights (keep base yolov8n.pt if tracked, ignore giant downloads)
 *.onnx.download
 *.tar.gz
+yolo11n.pt
+vision_pipeline/yolov8n.pt
 
 # Logs & temp
 *.log
@@ -30,6 +32,24 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Private keys
+# Private keys & credentials
 serviceAccountKey.json
 dashboard/.env.local
+
+# Binaries & installers
+*.exe
+*.msi
+
+# Temp snapshots & root scratch images
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+Untitled.ipynb
+.ipynb_checkpoints/
+scratch/
+runs/
+aiml_test_data/
+datasets/
+.vscode/

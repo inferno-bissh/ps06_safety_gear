@@ -1,0 +1,22 @@
+# Ultralytics YOLO Dataset Configuration for PS6 Industrial Safety
+# Problem Statement 06 — Multimodal Industrial Safety & Hazard Monitoring System
+
+# Dataset root directory (relative to this YAML file)
+path: .
+
+# Train / Val / Test relative paths
+train: images/train
+val: images/val
+test: images/test
+
+# Number of classes
+nc: 6
+
+# Class names mapping (matching the PS6 active neural PPE model weights)
+names:
+  0: Gloves
+  1: Vest
+  2: goggles
+  3: helmet
+  4: mask
+  5: safety_shoe

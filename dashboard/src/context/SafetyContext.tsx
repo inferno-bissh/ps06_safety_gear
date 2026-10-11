@@ -44,7 +44,9 @@ interface SafetyContextType {
   dataSource: "FIRESTORE" | "SIMULATION";
   isFirebaseAvailable: boolean;
   activeScenario: string | null;
+  liveHazard: { smoke: boolean; fire: boolean; smoke_index: number };
   // Actions
+  toggleLiveHazard: (type: "smoke" | "fire" | "reset", active?: boolean, smokeIndex?: number) => Promise<void>;
   setDataSource: (source: "FIRESTORE" | "SIMULATION") => void;
   seedFirestore: () => Promise<void>;
   triggerScenario: (scenario: "A" | "B" | "C" | "D" | "E" | "RESET") => void;
@@ -385,6 +387,11 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isP3TakeoverActive, setIsP3TakeoverActive] = useState(false);
   const [p3EmergencyIncident, setP3EmergencyIncident] = useState<Incident | null>(null);
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
+  const [liveHazard, setLiveHazard] = useState<{ smoke: boolean; fire: boolean; smoke_index: number }>({
+    smoke: false,
+    fire: false,
+    smoke_index: 0.0,
+  });
   
   // Dual-mode state: Firestore vs Simulation
   const [dataSource, setDataSource] = useState<"FIRESTORE" | "SIMULATION">("SIMULATION");
@@ -514,6 +521,109 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, []);
 
+  const toggleLiveHazard = async (type: "smoke" | "fire" | "reset", active?: boolean, smokeIndex?: number) => {
+    try {
+      if (type === "reset") {
+        await fetch("/api/cameras/hazard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reset: true }),
+        });
+        setLiveHazard({ smoke: false, fire: false, smoke_index: 0.0 });
+      } else if (type === "smoke") {
+        const targetActive = active !== undefined ? active : !liveHazard.smoke;
+        await fetch("/api/cameras/hazard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            smoke: targetActive,
+            smoke_index: smokeIndex ?? (targetActive ? 0.88 : 0.0),
+          }),
+        });
+        setLiveHazard((prev) => ({
+          ...prev,
+          smoke: targetActive,
+          smoke_index: targetActive ? (smokeIndex ?? 0.88) : 0.0,
+        }));
+      } else if (type === "fire") {
+        const targetActive = active !== undefined ? active : !liveHazard.fire;
+        await fetch("/api/cameras/hazard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fire: targetActive }),
+        });
+        setLiveHazard((prev) => ({
+          ...prev,
+          fire: targetActive,
+        }));
+      }
+    } catch (err) {
+      console.warn("[Hazard] Could not sync live hazard to port 5000:", err);
+    }
+  };
+
+  // Real-time synchronization with port 5000 hazard state
+  useEffect(() => {
+    let isMounted = true;
+    const syncHazard = async () => {
+      try {
+        const res = await fetch("/api/cameras/hazard");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (isMounted && data.success && data.hazard) {
+          const h = data.hazard;
+          setLiveHazard({
+            smoke: !!h.smoke,
+            fire: !!h.fire,
+            smoke_index: typeof h.smoke_index === "number" ? h.smoke_index : 0.0,
+          });
+
+          if (h.fire) {
+            setZones((prev) =>
+              prev.map((z) =>
+                z.zone_id === "WELDING_ZONE"
+                  ? {
+                      ...z,
+                      current_priority: "P3",
+                      fire_detected: true,
+                      smoke_detected: true,
+                      sensor_flame: true,
+                      sensor_smoke_raw: 820,
+                      sensor_smoke_index: 0.85,
+                    }
+                  : z
+              )
+            );
+            setFacility((prev) => ({ ...prev, emergency_siren_active: true }));
+            setIsP3TakeoverActive(true);
+          } else if (h.smoke) {
+            setZones((prev) =>
+              prev.map((z) =>
+                z.zone_id === "WELDING_ZONE"
+                  ? {
+                      ...z,
+                      current_priority: z.current_priority === "P3" ? "P3" : "P2",
+                      smoke_detected: true,
+                      sensor_smoke_index: typeof h.smoke_index === "number" ? h.smoke_index : 0.88,
+                      sensor_smoke_raw: 540,
+                    }
+                  : z
+              )
+            );
+          }
+        }
+      } catch {
+        // Broadcaster temporarily unreachable
+      }
+    };
+
+    const hazardInterval = setInterval(syncHazard, 1000);
+    return () => {
+      isMounted = false;
+      clearInterval(hazardInterval);
+    };
+  }, []);
+
   const persistIncident = async (incident: Incident) => {
     if (dataSource === "FIRESTORE" && isFirebaseConfigured()) {
       try {
@@ -558,6 +668,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsP3TakeoverActive(false);
       setP3EmergencyIncident(null);
       setSelectedIncident(null);
+      toggleLiveHazard("reset");
       return;
     }
 
@@ -659,6 +770,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setP3EmergencyIncident(fireIncident);
       setIsP3TakeoverActive(true);
       persistIncident(fireIncident);
+      toggleLiveHazard("fire", true);
     } else if (scenario === "C") {
       // Scenario C: Sensor-Only Smoke
       const sensorSmokeIncident: Incident = {
@@ -698,6 +810,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setIncidents((prev) => [sensorSmokeIncident, ...prev]);
       persistIncident(sensorSmokeIncident);
+      toggleLiveHazard("smoke", true, 0.48);
     } else if (scenario === "D") {
       // Scenario D: Visual Smoke
       const visualSmokeIncident: Incident = {
@@ -735,6 +848,7 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setIncidents((prev) => [visualSmokeIncident, ...prev]);
       persistIncident(visualSmokeIncident);
+      toggleLiveHazard("smoke", true, 0.88);
     } else if (scenario === "E") {
       // Scenario E: Negative Test (Total Connectivity Loss)
       setFacility((prev) => ({
@@ -907,6 +1021,8 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         dataSource,
         isFirebaseAvailable,
         activeScenario,
+        liveHazard,
+        toggleLiveHazard,
         setDataSource,
         seedFirestore,
         triggerScenario,

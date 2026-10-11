@@ -19,6 +19,30 @@ _ACTIVE_FRAMES: Dict[str, Optional[bytes]] = {
 _WORKERS_LOCK = threading.Lock()
 _ACTIVE_WORKERS: List[dict] = []
 
+_HAZARD_LOCK = threading.Lock()
+_HAZARD_STATE: Dict[str, any] = {
+    "smoke": False,
+    "smoke_index": 0.0,
+    "fire": False,
+    "last_updated": 0.0,
+}
+
+def get_hazard_state() -> dict:
+    with _HAZARD_LOCK:
+        return dict(_HAZARD_STATE)
+
+def set_hazard_state(smoke: Optional[bool] = None, fire: Optional[bool] = None, smoke_index: Optional[float] = None):
+    with _HAZARD_LOCK:
+        if smoke is not None:
+            _HAZARD_STATE["smoke"] = smoke
+            if smoke and smoke_index is not None:
+                _HAZARD_STATE["smoke_index"] = smoke_index
+            elif not smoke:
+                _HAZARD_STATE["smoke_index"] = 0.0
+        if fire is not None:
+            _HAZARD_STATE["fire"] = fire
+        _HAZARD_STATE["last_updated"] = time.time()
+
 class MJPEGStreamHandler(BaseHTTPRequestHandler):
     """
     High-performance MJPEG HTTP Streamer.
@@ -29,8 +53,74 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
-        # Determine requested stream channel
         path = self.path.strip("/").lower()
+
+        # 1. Health & Status
+        if path == "" or path == "health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ONLINE","engine":"SafetyIntel MJPEG Streamer"}')
+            return
+
+        # 2. Live Active Workers State
+        elif path == "api/workers" or path == "workers":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with _WORKERS_LOCK:
+                data = json.dumps(_ACTIVE_WORKERS).encode("utf-8")
+            self.wfile.write(data)
+            return
+
+        # 3. Single Frame Snapshots (JPEG)
+        elif "snapshot" in path:
+            cam = "cctv1" if "cctv1" in path else ("cctv2" if "cctv2" in path else "composite")
+            with _FRAME_LOCK:
+                frame_bytes = _ACTIVE_FRAMES.get(cam) or _ACTIVE_FRAMES.get("cctv1") or _ACTIVE_FRAMES.get("composite")
+            if frame_bytes:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(frame_bytes)))
+                self.end_headers()
+                self.wfile.write(frame_bytes)
+            else:
+                self.send_response(404)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b"No frame available yet")
+            return
+
+        # 4. Enrolled Face Roster
+        elif path == "api/roster" or path == "api/enrolled":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                from face_engine import WorkerFaceEngine
+                fe = WorkerFaceEngine()
+                roster = fe.database.get("names", [])
+            except Exception:
+                roster = []
+            self.wfile.write(json.dumps({"enrolled_workers": roster, "count": len(roster)}).encode("utf-8"))
+            return
+
+        # 5. Live Hazard State (Smoke / Fire)
+        elif path == "api/hazard" or path == "api/hazard/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with _HAZARD_LOCK:
+                data = json.dumps(_HAZARD_STATE).encode("utf-8")
+            self.wfile.write(data)
+            return
+
+        # 6. Multipart MJPEG Streaming Channels
         channel = "composite"
         if "cctv1" in path:
             channel = "cctv1"
@@ -42,22 +132,6 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
             channel = "cctv4"
         elif "composite" in path or "all" in path:
             channel = "composite"
-        elif path == "" or path == "health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(b'{"status":"ONLINE","engine":"SafetyIntel MJPEG Streamer"}')
-            return
-        elif path == "api/workers" or path == "workers":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            with _WORKERS_LOCK:
-                data = json.dumps(_ACTIVE_WORKERS).encode("utf-8")
-            self.wfile.write(data)
-            return
 
         # Start multipart MJPEG stream
         self.send_response(200)
@@ -87,6 +161,99 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
             pass
         except Exception:
             pass
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_POST(self):
+        path = self.path.strip("/").lower()
+        if path == "api/enroll":
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                payload = json.loads(post_data.decode("utf-8")) if post_data else {}
+                name = payload.get("name", "").strip()
+                if not name:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Worker name is required"}')
+                    return
+
+                cam = payload.get("camera", "cctv1").lower()
+                with _FRAME_LOCK:
+                    frame_bytes = _ACTIVE_FRAMES.get(cam) or _ACTIVE_FRAMES.get("cctv1")
+
+                if not frame_bytes:
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "No camera frame available"}')
+                    return
+
+                nparr = np.frombuffer(frame_bytes, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                from face_engine import WorkerFaceEngine
+                fe = WorkerFaceEngine()
+                success = fe.enroll_worker(name, [frame], save_crops=True)
+
+                self.send_response(200 if success else 422)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                if success:
+                    res = json.dumps({"status": "SUCCESS", "message": f"Worker '{name}' enrolled into Face ID database!"})
+                else:
+                    res = json.dumps({"status": "FAIL", "message": "No clear face detected in the live frame. Please face the camera directly."})
+                self.wfile.write(res.encode("utf-8"))
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                return
+
+        elif "api/hazard" in path:
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                payload = json.loads(post_data.decode("utf-8")) if post_data else {}
+                with _HAZARD_LOCK:
+                    if "reset" in path or "clear" in path or payload.get("reset"):
+                        _HAZARD_STATE["smoke"] = False
+                        _HAZARD_STATE["smoke_index"] = 0.0
+                        _HAZARD_STATE["fire"] = False
+                    elif "smoke" in path:
+                        active = payload.get("smoke") if "smoke" in payload else payload.get("active", True)
+                        _HAZARD_STATE["smoke"] = bool(active)
+                        _HAZARD_STATE["smoke_index"] = float(payload.get("smoke_index", 0.88 if active else 0.0))
+                    elif "fire" in path:
+                        active = payload.get("fire") if "fire" in payload else payload.get("active", True)
+                        _HAZARD_STATE["fire"] = bool(active)
+                    _HAZARD_STATE["last_updated"] = time.time()
+                    resp = json.dumps({"status": "SUCCESS", "hazard_state": _HAZARD_STATE}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                return
 
 class WebStreamBroadcaster:
     """

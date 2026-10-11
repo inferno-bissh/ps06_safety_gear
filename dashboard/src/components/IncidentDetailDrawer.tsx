@@ -161,19 +161,19 @@ export const IncidentDetailDrawer: React.FC = () => {
         </div>
 
         {/* Action Controls Footer */}
-        <div className="p-4 border-t border-[#26303C] bg-[#161F2B] space-y-3 sticky bottom-0">
+        <div className="p-4 sm:p-5 border-t border-[#26303C] bg-[#161F2B] space-y-3 sticky bottom-0 shadow-lg">
           {selectedIncident.status === "OPEN" && (
-            <div className="flex gap-2">
+            <div className="flex gap-2.5">
               <button
                 onClick={() => acknowledgeIncident(selectedIncident.incident_id)}
-                className="flex-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-2 rounded text-xs tracking-wider uppercase transition-colors flex items-center justify-center gap-1.5"
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold h-11 px-4 rounded-lg text-xs sm:text-sm tracking-wider uppercase transition-all flex items-center justify-center gap-2 shadow-md shadow-amber-950/30 active:scale-[0.98]"
               >
-                <CheckCircle className="w-4 h-4" />
+                <CheckCircle className="w-4 h-4 stroke-[2.5]" />
                 <span>Acknowledge Incident</span>
               </button>
               <button
                 onClick={() => setShowResolveInput(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded text-xs tracking-wider uppercase transition-colors"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold h-11 px-5 rounded-lg text-xs sm:text-sm tracking-wider uppercase transition-all shadow-md shadow-emerald-950/40 active:scale-[0.98]"
               >
                 Resolve
               </button>
@@ -181,13 +181,13 @@ export const IncidentDetailDrawer: React.FC = () => {
           )}
 
           {selectedIncident.status === "ACKNOWLEDGED" && !showResolveInput && (
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-amber-400">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-amber-400 font-semibold">
                 Acknowledged by {selectedIncident.acknowledged_by || "Supervisor"}
               </span>
               <button
                 onClick={() => setShowResolveInput(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded text-xs tracking-wider uppercase transition-colors"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold h-11 px-6 rounded-lg text-xs sm:text-sm tracking-wider uppercase transition-all shadow-md shadow-emerald-950/40 active:scale-[0.98]"
               >
                 Mark Resolved
               </button>
@@ -195,36 +195,36 @@ export const IncidentDetailDrawer: React.FC = () => {
           )}
 
           {showResolveInput && (
-            <div className="space-y-2 pt-2 border-t border-slate-700">
-              <label className="text-[11px] text-slate-300 font-bold block">
+            <div className="space-y-3 pt-2.5 border-t border-slate-700">
+              <label className="text-xs text-slate-200 font-bold block">
                 Resolution Note (Required for Safety Audit):
               </label>
               <textarea
                 value={resolutionNote}
                 onChange={(e) => setResolutionNote(e.target.value)}
                 placeholder="e.g. Worker instructed to wear helmet; area inspected and verified safe."
-                className="w-full bg-[#0B0F14] border border-[#26303C] rounded p-2 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-hidden focus:border-blue-500"
+                className="w-full bg-[#0B0F14] border border-[#26303C] rounded-lg p-3 text-xs sm:text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
                 rows={2}
               />
-              <div className="flex gap-2 justify-end">
+              <div className="flex gap-2.5 justify-end">
                 <button
                   onClick={() => setShowResolveInput(false)}
-                  className="px-3 py-1 bg-slate-800 text-slate-300 text-xs rounded hover:bg-slate-700"
+                  className="h-10 px-4 bg-slate-800 text-slate-300 text-xs font-semibold rounded-lg hover:bg-slate-700 border border-slate-700 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleResolve}
-                  className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded"
+                  className="h-10 px-5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold rounded-lg shadow-md transition-all active:scale-95"
                 >
-                  Confirm & Resolve
+                  Confirm &amp; Resolve
                 </button>
               </div>
             </div>
           )}
 
           {selectedIncident.status === "RESOLVED" && (
-            <div className="text-[11px] text-slate-400 bg-slate-900/60 p-2.5 rounded border border-slate-800">
+            <div className="text-xs text-slate-400 bg-slate-900/80 p-3 rounded-lg border border-slate-800">
               <span className="text-emerald-400 font-bold block mb-1">INCIDENT RESOLVED</span>
               <span>{selectedIncident.resolution_note || "Resolved after inspection"}</span>
             </div>

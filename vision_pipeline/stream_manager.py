@@ -2,11 +2,26 @@ import os
 import cv2
 import threading
 import time
+import socket
+from urllib.parse import urlparse
 import numpy as np
 from typing import Tuple, Optional, Union
 
 # Set FFmpeg network timeout to 2.5s to prevent OpenCV from hanging on unreachable camera IPs
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2500000"
+
+def is_host_reachable(url: str, timeout: float = 0.4) -> bool:
+    """Pre-checks network reachability of IP camera endpoint to prevent FFmpeg crashes."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
 
 def generate_synthetic_industrial_frame(w: int = 1280, h: int = 720, step: int = 0, camera_id: str = "CAM_TEST") -> np.ndarray:
     """Generates an animated high-tech industrial camera frame if physical feed is unavailable."""
@@ -123,13 +138,17 @@ class ThreadedCameraStream:
                                         break
                                     c.release()
                         else:
-                            c = cv2.VideoCapture(self.src)
-                            if c.isOpened():
-                                ret_test, frame_test = c.read()
-                                if ret_test and frame_test is not None:
-                                    test_cap = c
-                                else:
-                                    c.release()
+                            can_connect = True
+                            if str(self.src).startswith("http://") or str(self.src).startswith("https://"):
+                                can_connect = is_host_reachable(str(self.src), timeout=0.4)
+                            if can_connect:
+                                c = cv2.VideoCapture(self.src)
+                                if c.isOpened():
+                                    ret_test, frame_test = c.read()
+                                    if ret_test and frame_test is not None:
+                                        test_cap = c
+                                    else:
+                                        c.release()
 
                         if test_cap is not None and test_cap.isOpened():
                             self.cap = test_cap

@@ -21,7 +21,7 @@ import {
 import { ConnectCameraModal } from "@/components/ConnectCameraModal";
 
 export default function CamerasPage() {
-  const { cameras, zones, workerTracks, gateLogs } = useSafety();
+  const { cameras, zones, workerTracks, gateLogs, liveHazard } = useSafety();
   const [filterGatePpe, setFilterGatePpe] = useState<"ALL" | "COMPLIANT" | "NON_COMPLIANT">("ALL");
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [modalCameraId, setModalCameraId] = useState<string>("CCTV_02");
@@ -57,7 +57,7 @@ export default function CamerasPage() {
               setModalCameraId("CCTV_02");
               setIsConnectModalOpen(true);
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all border border-blue-400/40"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold shadow-md shadow-blue-500/25 transition-all border border-blue-400/40 min-h-[38px] active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>Connect IP Camera</span>
@@ -180,8 +180,8 @@ export default function CamerasPage() {
                   camera={camera}
                   workers={workerTracks}
                   zoneName={zone?.name || camera.zone_id}
-                  hasFireHazard={zone?.fire_detected}
-                  hasSmokeHazard={zone?.smoke_detected}
+                  hasFireHazard={liveHazard?.fire || zone?.fire_detected}
+                  hasSmokeHazard={liveHazard?.smoke || zone?.smoke_detected}
                   onConnectIp={(cam) => {
                     setModalCameraId(cam.camera_id);
                     setIsConnectModalOpen(true);

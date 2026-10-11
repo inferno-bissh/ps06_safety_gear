@@ -1,13 +1,18 @@
+"""Multimodal Industrial Safety Multi-Camera Orchestrator."""
 import os
 import sys
 import time
 import cv2
 import argparse
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 from ultralytics import YOLO
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from config import (
     FACILITY_ID,
@@ -22,7 +27,7 @@ from stream_manager import ThreadedCameraStream
 from face_engine import WorkerFaceEngine
 from ppe_detector import WorkerPPEEvaluator
 from firestore_client import FirestoreSyncClient
-from web_streamer import WebStreamBroadcaster
+from web_streamer import WebStreamBroadcaster, get_hazard_state, set_hazard_state
 
 def normalize_camera_source(src, default="0"):
     if src is None:
@@ -111,6 +116,10 @@ class MultiCameraOrchestrator:
         self.last_gate_eval_time: float = 0.0
         self.cached_gate_workers = []
         self.cached_gate_drawings = []
+        self.last_smoke_incident_time: float = 0.0
+        self.last_fire_incident_time: float = 0.0
+        self.smoke_active_prev: bool = False
+        self.fire_active_prev: bool = False
 
         # Pre-seed a checked-in worker for demo fallback if empty
         if len(self.active_checked_in_workers) == 0 and len(self.face_engine.database.get("names", [])) > 0:
@@ -158,12 +167,13 @@ class MultiCameraOrchestrator:
         gh, gw = gate_frame.shape[:2]
 
         # 1. Person Tracking with ByteTrack (persistent tracking across frames prevents ID swapping when switching sides)
+        # Using conf=0.38 eliminates low-confidence inanimate object noise (such as hanging bags or coats)
         results = self.gate_model.track(
             gate_frame,
             persist=True,
             classes=[0],
             tracker="bytetrack.yaml",
-            conf=0.25,
+            conf=0.42,
             verbose=False,
         )
         boxes = []
@@ -177,10 +187,16 @@ class MultiCameraOrchestrator:
             else:
                 raw_t = [i + 1 for i in range(len(raw_b))]
 
-            # Non-Maximum Suppression (eliminate duplicates with IoU > 0.45)
+            # Non-Maximum Suppression and minimum dimension filtering
             for b, t, c in zip(raw_b, raw_t, raw_c):
                 bx1, by1, bx2, by2 = b
-                b_area = max(1, (bx2 - bx1) * (by2 - by1))
+                bw = bx2 - bx1
+                bh = by2 - by1
+                # Discard tiny artifacts under desks, electrical sockets, or edge noise
+                if bw < 50 or bh < 80:
+                    continue
+
+                b_area = max(1, bw * bh)
                 overlap = False
                 for cb in boxes:
                     cx1, cy1, cx2, cy2 = cb
@@ -202,19 +218,21 @@ class MultiCameraOrchestrator:
             self.face_engine.detector.setInputSize((gw, gh))
             _, faces = self.face_engine.detector.detect(gate_frame)
 
-        # Extrapolate untracked faces if sitting very close
+        # Extrapolate untracked faces if sitting very close (require genuine face size)
         if faces is not None:
             for f in faces:
                 fx, fy, fw, fh = map(int, f[:4])
+                if fw < 35 or fh < 35:
+                    continue
                 is_covered = any(
                     bx1 <= (fx + fw // 2) <= bx2 and by1 <= (fy + fh // 2) <= by2
                     for bx1, by1, bx2, by2 in boxes
                 )
                 if not is_covered:
-                    wx1 = max(0, fx - int(fw * 0.50))
-                    wy1 = max(0, fy - int(fh * 0.70))
-                    wx2 = min(gw, fx + fw + int(fw * 0.50))
-                    wy2 = min(gh, fy + fh + int(fh * 2.5))
+                    wx1 = max(0, fx - int(fw * 0.75))
+                    wy1 = max(0, fy - int(fh * 0.85))
+                    wx2 = min(gw, fx + fw + int(fw * 0.75))
+                    wy2 = min(gh, fy + fh + int(fh * 2.8))
                     new_id = (max(track_ids) + 1) if track_ids else 1
                     boxes.append([wx1, wy1, wx2, wy2])
                     track_ids.append(new_id)
@@ -236,34 +254,77 @@ class MultiCameraOrchestrator:
 
             # Match face to box to tighten coordinates and identify worker
             matched_face = None
+            matched_face_raw = None
             if faces is not None:
                 for f in faces:
                     fx, fy, fw, fh = map(int, f[:4])
-                    if x1 - 30 <= (fx + fw // 2) <= x2 + 30 and y1 - 30 <= (fy + fh // 2) <= y2 + 30:
+                    if x1 - 40 <= (fx + fw // 2) <= x2 + 40 and y1 - 40 <= (fy + fh // 2) <= y2 + 40:
                         matched_face = (fx, fy, fw, fh)
+                        matched_face_raw = f
                         break
 
             if matched_face:
                 fx, fy, fw, fh = matched_face
-                # Tighten top of box to skull/helmet level (prevents drifting into ceiling or sunlit windows)
-                y1 = max(0, min(y1, fy - int(fh * 0.75)))
-                # Tighten horizontal bounds around worker
-                x1 = max(0, min(x1, fx - int(fw * 0.65)))
-                x2 = min(gw, max(x2, fx + fw + int(fw * 0.65)))
-                head_h = max(25, (fy + fh) - y1)
+                # Ensure appropriate headroom for safety helmets (helmet dome sits 0.70 to 0.85 * fh above brow fy)
+                helmet_top = max(0, fy - int(fh * 0.85))
+                y1 = min(y1, helmet_top)
+                # Prevent drifting excessively far above head into ceiling/wall:
+                y1 = max(y1, max(0, fy - int(fh * 1.10)))
+                # Horizontal bounds around worker
+                x1 = max(0, min(x1, fx - int(fw * 0.75)))
+                x2 = min(gw, max(x2, fx + fw + int(fw * 0.75)))
+                head_h = max(35, (fy + fh) - y1)
                 face_crop = gate_frame[max(0, fy - 10):min(gh, fy + fh + 10), max(0, fx - 10):min(gw, fx + fw + 10)]
             else:
                 head_h = max(20, int((y2 - y1) * 0.35))
                 face_crop = gate_frame[y1:y1 + head_h, x1:x2]
 
-            name, score = self.face_engine.identify_face(face_crop)
+            name, score = self.face_engine.identify_face(
+                face_crop, matched_face_raw=matched_face_raw, full_frame=gate_frame
+            )
             is_verified = bool(name and name not in ["Unidentified Worker", "Unregistered Worker"])
             worker_id = name if is_verified else f"GATE_WORKER_{tid:02d}"
 
-            # Evaluate PPE for every detected person on Gate Camera with neural + HSV fusion!
+            # Evaluate PPE for every candidate box on Gate Camera with neural + HSV fusion!
             ppe_res = self.gate_ppe_evaluator.evaluate_ppe(
                 gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}", frame_ppe_items=ppe_items
             )
+
+            # Inanimate Object Rejection:
+            # Eliminates hanging black backpacks on coat hooks, dark coats, chairs, curtains, etc.
+            # A genuine human worker in the gate choke-point MUST exhibit at least one confirmation:
+            # 1. Matched human face from YuNet detector
+            # 2. Verified safety gear (Helmet PASS or Vest PASS)
+            # 3. Measurable human skin tone in head/neck or body region (>= 4.5% skin)
+            if matched_face is None and ppe_res["helmet"] != "PASS" and ppe_res["vest"] != "PASS":
+                # Check skin in head/neck region
+                check_h = max(25, int(head_h * 1.25))
+                head_check_crop = gate_frame[y1:min(gh, y1 + check_h), x1:x2]
+                if head_check_crop.size > 0:
+                    ch_ycrcb = cv2.cvtColor(head_check_crop, cv2.COLOR_BGR2YCrCb)
+                    ch_hsv = cv2.cvtColor(head_check_crop, cv2.COLOR_BGR2HSV)
+                    m_ycrcb = cv2.inRange(ch_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+                    m_hsv = cv2.inRange(ch_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
+                    skin_ratio = cv2.countNonZero(cv2.bitwise_and(m_ycrcb, m_hsv)) / max(1, head_check_crop.shape[0] * head_check_crop.shape[1])
+                else:
+                    skin_ratio = 0.0
+
+                # Check skin across the entire candidate box (arms/hands/legs)
+                full_body_crop = gate_frame[y1:y2, x1:x2]
+                if full_body_crop.size > 0:
+                    fb_ycrcb = cv2.cvtColor(full_body_crop, cv2.COLOR_BGR2YCrCb)
+                    fb_hsv = cv2.cvtColor(full_body_crop, cv2.COLOR_BGR2HSV)
+                    fb_m1 = cv2.inRange(fb_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+                    fb_m2 = cv2.inRange(fb_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
+                    body_skin_ratio = cv2.countNonZero(cv2.bitwise_and(fb_m1, fb_m2)) / max(1, full_body_crop.shape[0] * full_body_crop.shape[1])
+                else:
+                    body_skin_ratio = 0.0
+
+                # If no face, no helmet, no vest, and no human skin:
+                # This is an inanimate object (e.g. hanging backpack, jacket on hook, chair) -> completely drop!
+                if skin_ratio < 0.045 and body_skin_ratio < 0.035:
+                    continue
+
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
@@ -276,7 +337,7 @@ class MultiCameraOrchestrator:
 
             box_col = (0, 230, 115) if is_compliant else (0, 140, 255)
             lbl = f"{name} ({score:.2f})" if is_verified else f"Worker [GATE_WORKER_{tid:02d}]"
-            ppe_lbl = f"H:{helmet} | V:{vest} | G:{gloves}"
+            ppe_lbl = f"H:{helmet} | V:{vest} | G:{gloves} | S:{shoes}"
             cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
 
             drawing_data = {
@@ -328,7 +389,7 @@ class MultiCameraOrchestrator:
                     gate_log_payload = {
                         "log_id": f"GATE-{int(now) % 1000000:06d}",
                         "worker_name": name,
-                        "checkin_time": datetime.utcnow().isoformat() + "Z",
+                        "checkin_time": datetime.now(timezone.utc).isoformat(),
                         "timestamp_display": checkin_time_str,
                         "gate_id": "GATE_01",
                         "ppe_status": gate_ppe_status,
@@ -348,28 +409,40 @@ class MultiCameraOrchestrator:
         if ward_frame is None or ward_frame.size == 0:
             return []
 
+        # Run dedicated neural YOLO PPE detection once for the ward frame
+        ppe_items = self.ward_ppe_evaluator.detect_frame_ppe(ward_frame)
+        wh, ww = ward_frame.shape[:2]
+
         # Track persons with ByteTrack with optimized confidence threshold
         results = self.ward_model.track(
             ward_frame, persist=True, classes=[0], tracker="bytetrack.yaml", conf=PERSON_CONF_THRESHOLD, verbose=False
         )
+
         if not results or len(results[0].boxes) == 0:
-            return []
-
-        # Run dedicated neural YOLO PPE detection once for the ward frame
-        ppe_items = self.ward_ppe_evaluator.detect_frame_ppe(ward_frame)
-
-        boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-        confidences = results[0].boxes.conf.cpu().numpy()
-        if results[0].boxes.id is not None:
-            track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+            # If user is holding phone camera close-up to scan specific PPE (shoes, gloves, vest),
+            # synthesize a target scan box around the detected PPE item
+            if not ppe_items:
+                return []
+            ix1 = min(item["box"][0] for item in ppe_items)
+            iy1 = min(item["box"][1] for item in ppe_items)
+            ix2 = max(item["box"][2] for item in ppe_items)
+            iy2 = max(item["box"][3] for item in ppe_items)
+            pad = 25
+            boxes = [[max(0, ix1 - pad), max(0, iy1 - pad), min(ww, ix2 + pad), min(wh, iy2 + pad)]]
+            track_ids = [1]
+            confidences = [0.85]
         else:
-            track_ids = [i + 1 for i in range(len(boxes))]
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int).tolist()
+            confidences = results[0].boxes.conf.cpu().numpy().tolist()
+            if results[0].boxes.id is not None:
+                track_ids = results[0].boxes.id.cpu().numpy().astype(int).tolist()
+            else:
+                track_ids = [i + 1 for i in range(len(boxes))]
 
         ward_workers = []
-        wh, ww = ward_frame.shape[:2]
 
         for box, track_id, conf in zip(boxes, track_ids, confidences):
-            x1, y1, x2, y2 = box
+            x1, y1, x2, y2 = map(int, box)
             str_tid = f"TRACK_{track_id:02d}"
 
             # Evaluate PPE compliance with neural + HSV fusion!
@@ -388,10 +461,9 @@ class MultiCameraOrchestrator:
             # In CCTV 2 (Welding Zone / Elevated Production Bay), safety policy mandates:
             # - Helmet: PASS
             # - Vest: PASS
-            # - Gloves: PASS
-            # If body or hands are NOT shown properly (UNKNOWN) or missing (FAIL),
-            # compliance strictly CANNOT pass!
-            is_compliant = (helmet == "PASS") and (vest == "PASS") and (gloves == "PASS")
+            # - Gloves: must NOT be FAIL (bare hands)
+            # - Safety Shoes: must NOT be FAIL (bad shoes/bare feet)
+            is_compliant = (helmet == "PASS") and (vest == "PASS") and (gloves != "FAIL") and (shoes != "FAIL")
 
             if not is_compliant:
                 self.violation_counters[track_id] = self.violation_counters.get(track_id, 0) + 1
@@ -414,8 +486,8 @@ class MultiCameraOrchestrator:
                 1,
             )
 
-            # PPE Badge on Ward Camera
-            ppe_badge = f"H:{helmet} | V:{vest} | G:{gloves}"
+            # PPE Badge on Ward Camera with all 4 PPE categories
+            ppe_badge = f"H:{helmet} | V:{vest} | G:{gloves} | S:{shoes}"
             cv2.putText(ward_frame, ppe_badge, (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
             # Partial visibility indicator or violation counter
@@ -583,6 +655,72 @@ class MultiCameraOrchestrator:
                 cv2.rectangle(ward_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
                 cv2.putText(ward_resized, f"[CCTV 2] PRODUCTION BAY (Front View) - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
 
+                # Check real-time environmental hazard state (Smoke / Fire)
+                hazard = get_hazard_state()
+                if hazard.get("smoke"):
+                    s_idx = float(hazard.get("smoke_index") or 0.85)
+                    cv2.rectangle(ward_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
+                    cv2.putText(ward_resized, f"WARNING: SMOKE HAZARD DETECTED (Index: {s_idx:.2f}) [P2]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2)
+                    if not self.smoke_active_prev or (time.time() - self.last_smoke_incident_time > 60.0):
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        smoke_inc = {
+                            "incident_id": f"SMK-{int(time.time()) % 1000000:06d}",
+                            "facility_id": self.facility_id,
+                            "zone_id": self.zone_id,
+                            "zone_name": ZONE_NAME,
+                            "camera_id": "CAM_01_WARD",
+                            "source_event_type": "SMOKE",
+                            "priority": "P2",
+                            "timestamp": now_iso,
+                            "confidence": 0.88,
+                            "status": "OPEN",
+                            "required_action": "INSPECTION REQUIRED — VISUAL SMOKE CLOUD DETECTED",
+                            "decision_reason": "Elevated smoke plume detected on CCTV 2 -> P2 Advisory Incident.",
+                            "evidence_image": "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
+                            "vision_evidence": {"fire": False, "smoke": True},
+                            "sensor_evidence": {"smoke_index": s_idx},
+                            "network_mode": "LAN",
+                        }
+                        print(f"\n[ALERT] P2 Smoke Incident triggered -> Pushing to Firestore...")
+                        self.firestore.push_incident(smoke_inc)
+                        self.firestore.update_zone_priority(self.zone_id, "P2", smoke_detected=True)
+                        self.last_smoke_incident_time = time.time()
+                    self.smoke_active_prev = True
+                elif self.smoke_active_prev:
+                    self.firestore.update_zone_priority(self.zone_id, "P0", smoke_detected=False)
+                    self.smoke_active_prev = False
+
+                if hazard.get("fire"):
+                    cv2.rectangle(ward_resized, (10, 74), (w_sub - 10, 108), (0, 0, 230), -1)
+                    cv2.putText(ward_resized, "CRITICAL: ACTIVE FLAME DETECTED [P3 TAKEOVER]", (18, 97), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2)
+                    if not self.fire_active_prev or (time.time() - self.last_fire_incident_time > 60.0):
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        fire_inc = {
+                            "incident_id": f"FIR-{int(time.time()) % 1000000:06d}",
+                            "facility_id": self.facility_id,
+                            "zone_id": self.zone_id,
+                            "zone_name": ZONE_NAME,
+                            "camera_id": "CAM_01_WARD",
+                            "source_event_type": "FIRE",
+                            "priority": "P3",
+                            "timestamp": now_iso,
+                            "confidence": 0.96,
+                            "status": "OPEN",
+                            "required_action": "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
+                            "decision_reason": "Flame verified on CCTV bay -> Critical P3 Emergency Takeover.",
+                            "evidence_image": "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+                            "vision_evidence": {"fire": True, "smoke": True},
+                            "network_mode": "LAN",
+                        }
+                        print(f"\n[CRITICAL] P3 Fire Incident triggered -> Pushing to Firestore...")
+                        self.firestore.push_incident(fire_inc)
+                        self.firestore.update_zone_priority(self.zone_id, "P3", fire_detected=True, smoke_detected=True)
+                        self.last_fire_incident_time = time.time()
+                    self.fire_active_prev = True
+                elif self.fire_active_prev:
+                    self.firestore.update_zone_priority(self.zone_id, "P0", fire_detected=False)
+                    self.fire_active_prev = False
+
                 composite = np.hstack([gate_resized, ward_resized])
 
                 # Bottom Status Bar
@@ -623,6 +761,14 @@ class MultiCameraOrchestrator:
                         k = cv2.waitKey(1) & 0xFF
                         if k == ord('q'):
                             break
+                        elif k in (ord('s'), ord('S')):
+                            cur = get_hazard_state().get("smoke", False)
+                            set_hazard_state(smoke=not cur, smoke_index=0.88 if not cur else 0.0)
+                            print(f"[Hazard] Toggled smoke simulation: {not cur}")
+                        elif k in (ord('f'), ord('F')):
+                            cur = get_hazard_state().get("fire", False)
+                            set_hazard_state(fire=not cur)
+                            print(f"[Hazard] Toggled fire simulation: {not cur}")
                     except Exception:
                         time.sleep(0.01)
                 else:
