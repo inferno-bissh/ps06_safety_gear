@@ -915,19 +915,50 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-11 (Session 49)
+- **Agent Focus:** Senior CV & AI Engineering Investigation & Fix for Safety Helmet/PPE Detection on CCTV 1 & CCTV 2.
+- **Key Decisions & Accomplishments:**
+  - **Pipeline Inspection & Root Cause Diagnosis:**
+    - Model verified: [`vision_pipeline/yolov8n_ppe.pt`](file:///c:/Users/dehur/ps_06/vision_pipeline/yolov8n_ppe.pt) has 6 custom PPE classes (`{0: 'Gloves', 1: 'Vest', 2: 'goggles', 3: 'helmet', 4: 'mask', 5: 'safety_shoe'}`).
+    - Diagnosed that `HELMET_CONF_THRESHOLD = 0.42` in `config.py` was discarding real neural helmet detections (which output confidences in the $0.16-0.35$ range).
+    - Diagnosed that crown ROI vertical span previously cut off the top $40\%$ of the helmet dome (`sy1 = fy - 0.65*fh`) and extended into forehead skin (`sy2 = fy + 0.05*fh`), causing `skin_ratio >= 0.28` (`BARE_SKIN`).
+    - Diagnosed that in `evaluate_ppe`, `helmet_hsv_color not in [..., 'BARE_SKIN']` was blocking neural YOLO detections because human workers naturally have skin on their forehead/face below the helmet.
+    - Diagnosed that the previous HSV yellow mask ($S \ge 105, V \ge 115$) captured only $4.7\%$ of real helmets due to shadows and specular highlights in real webcam lighting.
+    - Diagnosed that white helmet shell was matching white ceilings/walls without neural confirmation.
+  - **Engineering Implementation:**
+    - [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py): Set `HELMET_CONF_THRESHOLD = 0.16` and `PPE_CONF_THRESHOLD = 0.16`.
+    - [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py):
+      - Added tracking for `helmet_neural_box = (ix1, iy1, ix2, iy2)`.
+      - Updated crown ROI geometry: when `face_bbox` is present, $sy_1 = \max(0, fy - 1.15 \cdot fh)$ and $sy_2 = \max(0, fy - 0.05 \cdot fh)$, covering the apex of the helmet dome while terminating right above eyebrows with zero forehead skin bleed.
+      - When Neural YOLO locates a candidate helmet box, that exact region is prioritized for crown ROI and color inspection.
+      - Updated realistic plastic hardhat HSV color ranges for Yellow ($H \in [16, 38], S \in [45, 255], V \in [70, 255]$), Orange, Blue, Red, Green, and White.
+      - White hardhat shell requires neural YOLO confirmation to prevent plain white walls or ceilings from passing.
+      - Removed `BARE_SKIN` from blocking Neural YOLO detections.
+    - [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py):
+      - Enhanced `_redraw_gate_overlays` (CCTV 1) and `process_ward_stream` (CCTV 2) to render high-contrast bounding boxes with explicit text labels: `Helmet Detected` (green) and `Helmet Not Detected` (red/orange).
+    - [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx) & [`dashboard/src/components/PPEChip.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PPEChip.tsx):
+      - Updated AI overlay tags and footer chips to explicitly render `Helmet Detected` vs `Helmet Not Detected`.
+  - **Validation & Testing:**
+    - Created and executed [`scratch/test_helmet_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_helmet_fix.py):
+      - Real worker wearing yellow hardhat ([`scratch/real_worker_1.jpg`](file:///c:/Users/dehur/ps_06/scratch/real_worker_1.jpg)): `Helmet=PASS`, `Source=HELMET_SHELL`, `Conf=0.18`, Crown ROI `(1415, 58, 2287, 1161)` -> PASS.
+      - Worker wearing baseball cap ([`scratch/real_worker_0.jpg`](file:///c:/Users/dehur/ps_06/scratch/real_worker_0.jpg)): `Helmet=FAIL`, `Source=NONE`, `Conf=0.00` -> PASS.
+      - User bare hair ([`bisssh/face_01.jpg`](file:///c:/Users/dehur/ps_06/vision_pipeline/known_workers/bisssh/face_01.jpg)): `Helmet=FAIL`, `Color=BARE_HAIR`, `Conf=0.00` -> PASS.
+    - TypeScript compilation: `npx tsc --noEmit` -> 0 errors.
+    - Python compilation: `python -m py_compile` -> 0 errors.
+    - Restarted `multicam_orchestrator.py` daemon; verified `/health` (200 ONLINE) and `/api/workers`.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/PPEChip.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PPEChip.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+  - Created: [`scratch/test_helmet_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_helmet_fix.py)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Populate Training Data:**
-   - Place annotated PPE images and labels into `vision_pipeline/dataset/images/train`, `images/val` and `labels/train`, `labels/val`.
-   - Alternatively, if raw image/label folder is located elsewhere, run:
-     `python vision_pipeline/prepare_dataset.py --source "C:/path/to/raw_data"`
-2. **Execute Full PPE Training Run:**
-   - Run `python vision_pipeline/train_yolo.py --data vision_pipeline/dataset/ppe_dataset.yaml --epochs 50 --batch 8`
-3. **Validate Trained Model:**
-   - Run `python vision_pipeline/val_yolo.py --weights runs/detect/ps6_ppe_train/weights/best.pt --data vision_pipeline/dataset/ppe_dataset.yaml`
-4. **Operations Console Dashboard:**
+1. **Physical Webcam Verification:**
+   - Stand in front of laptop webcam (CCTV 1) wearing a safety helmet and verify the green bounding box and `Helmet Detected` badge.
+   - Remove the helmet and verify the amber/red bounding box and `Helmet Not Detected` badge.
+2. **Operations Console Dashboard:**
    - Access [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) on LAN.
+
 
 

@@ -35,7 +35,11 @@ export const PPEChip: React.FC<PPEChipProps> = ({
       {status === "FAIL" && <X className="w-3 h-3 text-red-400 stroke-[3]" />}
       {status === "UNKNOWN" && <HelpCircle className="w-3 h-3 text-purple-400 stroke-[2.5]" />}
       <span className="font-medium text-[11px] uppercase tracking-wide">{label}:</span>
-      <span className="font-bold text-[10px]">{style.label}</span>
+      <span className="font-bold text-[10px]">
+        {label.toLowerCase() === "helmet"
+          ? (status === "PASS" ? "DETECTED" : status === "FAIL" ? "NOT DETECTED" : "UNKNOWN")
+          : style.label}
+      </span>
     </div>
   );
 };

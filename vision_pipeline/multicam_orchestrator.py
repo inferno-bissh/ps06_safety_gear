@@ -148,8 +148,14 @@ class MultiCameraOrchestrator:
             cv2.putText(frame, d["ppe_lbl"], (x1 + 4, y1 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
             cx1, cy1, cx2, cy2 = d["crown_roi"]
             if cx2 > cx1 and cy2 > cy1:
-                roi_col = (0, 255, 120) if d["helmet"] == "PASS" else (0, 140, 255)
-                cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+                is_helmet_pass = (d["helmet"] == "PASS")
+                roi_col = (0, 255, 120) if is_helmet_pass else (0, 70, 255)
+                cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), roi_col, 2)
+                h_txt = "Helmet Detected" if is_helmet_pass else "Helmet Not Detected"
+                (tw, th), _ = cv2.getTextSize(h_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+                ty1 = max(18, cy1 - 4)
+                cv2.rectangle(frame, (cx1, ty1 - th - 4), (cx1 + tw + 6, ty1), (15, 20, 28), -1)
+                cv2.putText(frame, h_txt, (cx1 + 3, ty1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_col, 1)
 
     def process_gate_stream(self, gate_frame: np.ndarray) -> list:
         """Processes choke-point gate camera for identity verification, PPE evaluation, and access logging."""
@@ -536,8 +542,14 @@ class MultiCameraOrchestrator:
             # Crown ROI indicator
             cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
             if cx2 > cx1 and cy2 > cy1:
-                roi_col = (0, 255, 120) if helmet == "PASS" else (0, 140, 255)
-                cv2.rectangle(ward_frame, (cx1, cy1), (cx2, cy2), roi_col, 1)
+                is_helmet_pass = (helmet == "PASS")
+                roi_col = (0, 255, 120) if is_helmet_pass else (0, 70, 255)
+                cv2.rectangle(ward_frame, (cx1, cy1), (cx2, cy2), roi_col, 2)
+                h_txt = "Helmet Detected" if is_helmet_pass else "Helmet Not Detected"
+                (tw, th), _ = cv2.getTextSize(h_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+                ty1 = max(18, cy1 - 4)
+                cv2.rectangle(ward_frame, (cx1, ty1 - th - 4), (cx1 + tw + 6, ty1), (15, 20, 28), -1)
+                cv2.putText(ward_frame, h_txt, (cx1 + 3, ty1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_col, 1)
 
             ward_workers.append({
                 "worker_track_id": str_tid,

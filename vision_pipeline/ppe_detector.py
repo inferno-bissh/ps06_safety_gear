@@ -122,6 +122,7 @@ class WorkerPPEEvaluator:
         # 1. Neural YOLO PPE Matching via Spatial Containment
         helmet_neural = False
         helmet_neural_conf = 0.0
+        helmet_neural_box = None
         vest_neural = False
         vest_neural_conf = 0.0
         gloves_neural = False
@@ -145,7 +146,9 @@ class WorkerPPEEvaluator:
                 if "helmet" in lbl:
                     if (y1 - max(80, int(box_h * 0.45))) <= icy <= (y1 + max(80, int(box_h * 0.55))):
                         helmet_neural = True
-                        helmet_neural_conf = max(helmet_neural_conf, iconf)
+                        if iconf > helmet_neural_conf:
+                            helmet_neural_conf = iconf
+                            helmet_neural_box = (ix1, iy1, ix2, iy2)
 
                 # Vest: center within torso (12% to 90% of worker box)
                 elif "vest" in lbl:
@@ -204,15 +207,25 @@ class WorkerPPEEvaluator:
             torso_y1_ratio = 0.22
             torso_y2_ratio = 0.68
 
-        # Target skull crown ROI: use face_bbox anchor if available (eliminating wall background bleed)
-        if face_bbox is not None:
+        # Target skull crown ROI:
+        # Priority 1: If Neural YOLO located a helmet bounding box on this worker, inspect that candidate region
+        if helmet_neural_box is not None:
+            hx1, hy1, hx2, hy2 = helmet_neural_box
+            crown_roi = (hx1, hy1, hx2, hy2)
+            head_crop = frame[hy1:hy2, hx1:hx2]
+        # Priority 2: Use face_bbox anchor if available (covers apex of hardhat dome directly above brow)
+        elif face_bbox is not None:
             fx, fy, fw, fh = face_bbox
-            sx1 = max(0, fx + int(fw * 0.10))
-            sx2 = min(w, fx + fw - int(fw * 0.10))
-            sy1 = max(0, fy - int(fh * 0.65))
-            sy2 = min(h, fy + int(fh * 0.05))
+            sx1 = max(0, fx - int(fw * 0.15))
+            sx2 = min(w, fx + fw + int(fw * 0.15))
+            sy1 = max(0, fy - int(fh * 1.15))
+            sy2 = max(0, fy - int(fh * 0.05))
+            if sy2 <= sy1:
+                sy2 = fy
+                sy1 = max(0, fy - int(fh * 0.85))
             head_crop = frame[sy1:sy2, sx1:sx2]
             crown_roi = (sx1, sy1, sx2, sy2)
+        # Priority 3: Worker aspect ratio bounding box estimate
         else:
             head_h = max(20, int(box_h * head_h_ratio))
             sx1 = max(0, x1 + int(box_w * 0.20))
@@ -240,25 +253,37 @@ class WorkerPPEEvaluator:
 
         # 3. Hybrid Fusion: Neural YOLO + Color/Dome Shell Classification
         # HELMET EVALUATION:
-        # Passes if hardhat shell/color confirms helmet OR Neural YOLO detects helmet (with bare hair protection)!
+        # Passes if hardhat shell/color confirms helmet OR Neural YOLO detects helmet!
         if helmet_hsv_pass:
-            helmet_pass = True
-            helmet_source = "HELMET_SHELL"
-            helmet_color = helmet_hsv_color
+            if helmet_hsv_color == "WHITE" and not helmet_neural:
+                # White background wall/ceiling without neural helmet confirmation is rejected
+                helmet_pass = False
+                helmet_source = "NONE"
+                helmet_color = "NONE"
+            else:
+                helmet_pass = True
+                helmet_source = "HELMET_SHELL"
+                helmet_color = helmet_hsv_color
+                if helmet_neural_box is not None:
+                    crown_roi = helmet_neural_box
         elif (
             helmet_neural
             and helmet_neural_conf >= HELMET_CONF_THRESHOLD
-            and helmet_hsv_color not in ["PAPER_BAG", "BARE_HAIR", "HAIR_TEXTURE", "BARE_SKIN"]
+            and helmet_hsv_color not in ["PAPER_BAG", "BARE_HAIR", "HAIR_TEXTURE"]
         ):
-            # Neural YOLO confirms helmet only when bare hair or scalp is NOT detected on skull
+            # Neural YOLO confirms helmet when bare hair is NOT detected on skull
             helmet_pass = True
             helmet_source = "NEURAL_YOLO"
-            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
-        elif helmet_neural and helmet_neural_conf >= 0.75 and helmet_hsv_color != "PAPER_BAG":
-            # Extremely high neural confidence exception (>75%)
+            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE", "BARE_SKIN"] else "VERIFIED"
+            if helmet_neural_box is not None:
+                crown_roi = helmet_neural_box
+        elif helmet_neural and helmet_neural_conf >= 0.35 and helmet_hsv_color != "PAPER_BAG":
+            # High neural confidence exception (>= 35%)
             helmet_pass = True
             helmet_source = "NEURAL_YOLO"
             helmet_color = "VERIFIED"
+            if helmet_neural_box is not None:
+                crown_roi = helmet_neural_box
         else:
             helmet_pass = False
             helmet_source = "NONE"
@@ -518,15 +543,15 @@ class WorkerPPEEvaluator:
 
         # 3. Authentic High-Vis Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
         # Note: Blue requires S >= 130 and V >= 95 so cool white/grey room walls and monitor glow never pass!
-        mask_yellow = cv2.inRange(crown_hsv, np.array([20, 105, 115]), np.array([38, 255, 255]))
-        mask_orange = cv2.inRange(crown_hsv, np.array([8, 140, 125]), np.array([22, 255, 255]))
-        mask_blue = cv2.inRange(crown_hsv, np.array([98, 130, 95]), np.array([128, 255, 255]))
+        mask_yellow = cv2.inRange(crown_hsv, np.array([16, 45, 70]), np.array([38, 255, 255]))
+        mask_orange = cv2.inRange(crown_hsv, np.array([6, 80, 80]), np.array([24, 255, 255]))
+        mask_blue = cv2.inRange(crown_hsv, np.array([95, 90, 70]), np.array([130, 255, 255]))
         mask_red = cv2.bitwise_or(
-            cv2.inRange(crown_hsv, np.array([0, 140, 95]), np.array([8, 255, 255])),
-            cv2.inRange(crown_hsv, np.array([170, 140, 95]), np.array([180, 255, 255]))
+            cv2.inRange(crown_hsv, np.array([0, 90, 70]), np.array([8, 255, 255])),
+            cv2.inRange(crown_hsv, np.array([170, 90, 70]), np.array([180, 255, 255]))
         )
-        mask_green = cv2.inRange(crown_hsv, np.array([42, 105, 95]), np.array([85, 255, 255]))
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 155]), np.array([180, 45, 255]))
+        mask_green = cv2.inRange(crown_hsv, np.array([38, 65, 70]), np.array([86, 255, 255]))
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 180]), np.array([180, 45, 255]))
 
         color_counts = {
             "YELLOW": cv2.countNonZero(mask_yellow),
@@ -556,13 +581,13 @@ class WorkerPPEEvaluator:
             return False, "PAPER_BAG", white_ratio, colored_ratio, crown_roi_global
 
         # 5. Authentic Colored Hardhat (Yellow, Orange, Blue, Red, Green):
-        # Requires at least 28% coverage of skull dome, strictly exceeding hair ratio, and plastic smoothness
-        if best_color != "WHITE" and best_ratio >= 0.28 and best_ratio > hair_ratio and lap_var < 340:
+        # Requires at least 20% coverage of skull dome, strictly exceeding hair ratio, and plastic smoothness
+        if best_color != "WHITE" and best_ratio >= 0.20 and best_ratio > hair_ratio and lap_var < 340:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
 
         # 6. Authentic White Hardhat:
-        # Requires at least 35% solid white plastic coverage, low hair (<20%), and smooth finish (lap_var < 200)
-        if best_color == "WHITE" and white_ratio >= 0.35 and hair_ratio < 0.20 and white_ratio > hair_ratio and lap_var < 200:
+        # Requires at least 25% solid white plastic coverage, low hair (<20%), and smooth finish (lap_var < 240)
+        if best_color == "WHITE" and white_ratio >= 0.25 and hair_ratio < 0.20 and white_ratio > hair_ratio and lap_var < 240:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
 
         # 7. Explicit Bare Hair Rejection:

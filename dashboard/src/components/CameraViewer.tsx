@@ -459,7 +459,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                       <div className="absolute -bottom-6 left-0 flex gap-1 flex-wrap">
                         <span
                           className={cn(
-                            "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                            "text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider",
                             worker.ppe.helmet === "PASS"
                               ? "bg-emerald-600 text-white"
                               : worker.ppe.helmet === "FAIL"
@@ -467,7 +467,11 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                               : "bg-purple-800 text-purple-200"
                           )}
                         >
-                          H: {worker.ppe.helmet}
+                          {worker.ppe.helmet === "PASS"
+                            ? "Helmet Detected"
+                            : worker.ppe.helmet === "FAIL"
+                            ? "Helmet Not Detected"
+                            : "Helmet: Unknown"}
                         </span>
                         <span
                           className={cn(
