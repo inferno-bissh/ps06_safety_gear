@@ -812,7 +812,14 @@ def main():
         no_gui=args.no_gui,
         demo_ppe_pass=args.demo_ppe_pass,
     )
-    orchestrator.run()
+    try:
+        orchestrator.run()
+    except KeyboardInterrupt:
+        print("\n[Orchestrator] Interrupted by user.")
+    except Exception as e:
+        import traceback
+        print(f"\n[Orchestrator Fatal Exception]: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
