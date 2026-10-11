@@ -1,9 +1,15 @@
+import sys
 import time
 import argparse
 import numpy as np
 import cv2
 from datetime import datetime
+from pathlib import Path
 from ultralytics import YOLO
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from config import (
     FACILITY_ID,

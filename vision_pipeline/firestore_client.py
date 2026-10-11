@@ -1,7 +1,14 @@
+import sys
 import json
 import logging
 import requests
 from datetime import datetime
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from config import (
     FIREBASE_PROJECT_ID,
     FIREBASE_API_KEY,

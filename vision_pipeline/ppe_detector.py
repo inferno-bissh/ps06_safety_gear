@@ -1,8 +1,14 @@
+import sys
 import time
 from pathlib import Path
 import numpy as np
 import cv2
 from typing import Dict, Tuple, Optional, List
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from config import (
     TEMPORAL_CONFIRMATION_FRAMES,
     PPE_MODEL_PATH,
