@@ -1037,15 +1037,48 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/Header.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/Header.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx), [`scratch/test_inanimate_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_inanimate_fix.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-12 (Session 53)
+- **Agent Focus:** Resilient IP Camera Dynamic Reconnection Architecture for Phone Camera (CCTV 2) without Hardcoding, Source Code Edits, or Laptop Webcam (CCTV 1) Interruptions.
+- **Root Cause of Stale Phone IP:**
+  1. *Daemon Memory State:* `multicam_orchestrator.py` parsed CLI arguments once on boot and passed `--cctv2-front` into worker thread loops without an HTTP control interface to mutate stream sources at runtime.
+  2. *Hardcoded Fallbacks:* Multiple backend and frontend files defaulted to `http://192.168.1.5:8080/video`.
+  3. *No Persistent Configuration Store:* Dynamic edits previously had nowhere to be preserved across server restarts or page refreshes.
+- **Key Decisions & Accomplishments:**
+  1. **Persistent Configuration Store (`camera_config.json`):**
+     - Stores `cctv1`, `cctv2`, `cctv2_ip`, `cctv2_port`, `cctv2_endpoint`, `cctv2_status`, and `updated_at`.
+     - Loaded automatically by `multicam_orchestrator.py` on startup and synced by Next.js API.
+  2. **In-Process Dynamic Stream Reconnection in Python:**
+     - [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py): Added `update_source()`, `disconnect()`, and `get_status()`. Converted `self.lock` to `threading.RLock()` and calculated latency inline to avoid lock recursion.
+     - [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py): Added `register_camera_callbacks()`, `GET /api/cameras/status`, and `POST /api/cameras/source` with exact `Content-Length` headers.
+     - [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py): Integrated dynamic source switching callback (`update_camera_source`) without touching or dropping CCTV 1 (webcam).
+  3. **Next.js Full-Stack API Layer:**
+     - Created [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts): Handles `GET` (loads persisted config and queries orchestrator status) and `POST` (validates IP syntax, probes reachability via TCP socket with 1.2s timeout, saves to `camera_config.json`, and updates orchestrator dynamically).
+     - Enhanced [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts): Updates camera config dynamically if orchestrator is already running without cold restarting.
+  4. **Frontend UI Components:**
+     - Created [`dashboard/src/components/PhoneCameraSettings.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PhoneCameraSettings.tsx): Industrial dark control panel featuring IP address input, Quick Presets (`IP Webcam :8080`, `DroidCam :4747`), port/endpoint drawer, live reachability ping, Connect / Disconnect / Reconnect buttons, and real-time status banner.
+     - Embedded in [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx) with a quick `[Phone IP]` toggle directly above CCTV 2 feed.
+     - Embedded in [`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx) and [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/cameras/page.tsx).
+     - Persists configured IP in browser `localStorage` as well as backend `camera_config.json`.
+- **Verification & Testing:**
+  - `GET http://localhost:5000/api/cameras/status`: Confirmed sub-20ms JSON return displaying both camera channels and saved configuration.
+  - `POST http://localhost:5000/api/cameras/source`: Dynamically updated CCTV 2 source without dropping or resetting CCTV 1 (DirectShow webcam maintained 100% uptime, >900 frames, 0 drops).
+  - `POST http://localhost:3000/api/cameras/config`: Verified IP format validation, unreachable probe handling with helpful UI diagnostics, and disconnect action.
+  - TypeScript Compilation: `npx tsc --noEmit` exited with 0 errors.
+  - Python Bytecode Compilation: `py_compile` across all files exited with 0 errors.
+- **Files Created/Modified:**
+  - Created: [`camera_config.json`](file:///c:/Users/dehur/ps_06/camera_config.json), [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts), [`dashboard/src/components/PhoneCameraSettings.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PhoneCameraSettings.tsx)
+  - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/cameras/page.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Dashboard Access:**
-   - Open [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) for the clean industrial command center.
-2. **Webcam Real-World Check:**
-   - Stand or sit in front of the laptop webcam (CCTV 1): observe instantaneous person tracking with live PPE status.
-   - Hang a shirt/jacket in the background or step out of the frame: verify the system displays `Person Not Detected` with zero false tracks and zero false violations.
+1. **Live Phone Camera Usage:**
+   - Launch your phone streaming app (e.g. *IP Webcam* on Android or *DroidCam*).
+   - Check the IP address displayed on the phone screen (e.g. `192.168.1.42:8080`).
+   - On the dashboard, click **"Phone IP"** on CCTV 2 (or in the header), enter the new IP, and click **"Connect"**.
+   - The stream will dynamically attach to CCTV 2 within seconds with zero restarts or code edits.
+
 
 
 

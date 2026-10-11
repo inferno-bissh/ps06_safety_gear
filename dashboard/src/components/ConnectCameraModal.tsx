@@ -170,26 +170,16 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
         status: "ONLINE",
       });
 
-      // Automatically launch / refresh the Python AI Vision Orchestrator on port 5000
-      // Ensure broadcast URLs containing :5000 are NEVER passed back as camera hardware sources!
-      const getSafeSource = (id: string, fallback: string) => {
-        if (selectedCamId === id) {
-          return normalizedStreamUrl || fallback;
-        }
-        const found = cameras.find((c) => c.camera_id === id);
-        const url = (found?.stream_url || "").trim();
-        if (!url || url.includes(":5000")) return fallback;
-        return url;
-      };
-
-      const cctv1 = getSafeSource("CCTV_01", "0");
-      const cctv2 = getSafeSource("CCTV_02", "http://192.168.1.5:8080/video");
-
-      await fetch("/api/cameras/start-stream", {
+      // Dynamically update the camera source via /api/cameras/config without dropping other feeds
+      await fetch("/api/cameras/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cctv1, cctv2, forceRestart: true }),
-      }).catch((e) => console.warn("Could not auto-start python stream:", e));
+        body: JSON.stringify({
+          channel: selectedCamId === "CCTV_01" ? "cctv1" : "cctv2",
+          url: normalizedStreamUrl,
+          action: "connect",
+        }),
+      }).catch((e) => console.warn("Could not dynamically update camera:", e));
 
       onClose();
     } finally {

@@ -17,14 +17,17 @@ import {
   Workflow,
   CheckCircle2,
   Plus,
+  Smartphone,
 } from "lucide-react";
 import { ConnectCameraModal } from "@/components/ConnectCameraModal";
+import { PhoneCameraSettings } from "@/components/PhoneCameraSettings";
 
 export default function CamerasPage() {
   const { cameras, zones, workerTracks, gateLogs, liveHazard } = useSafety();
   const [filterGatePpe, setFilterGatePpe] = useState<"ALL" | "COMPLIANT" | "NON_COMPLIANT">("ALL");
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [modalCameraId, setModalCameraId] = useState<string>("CCTV_02");
+  const [showPhoneSettings, setShowPhoneSettings] = useState(false);
 
   const filteredLogs = gateLogs.filter((log) => {
     if (filterGatePpe === "ALL") return true;
@@ -53,6 +56,18 @@ export default function CamerasPage() {
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            onClick={() => setShowPhoneSettings(!showPhoneSettings)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-bold shadow-sm transition-all border min-h-[38px] cursor-pointer ${
+              showPhoneSettings
+                ? "bg-cyan-500/25 border-cyan-400 text-cyan-200"
+                : "bg-[#161F2B] hover:bg-slate-800 text-cyan-300 border-[#26303C]"
+            }`}
+            title="Configure Phone Camera IP Address & Stream Settings"
+          >
+            <Smartphone className="w-4 h-4 text-cyan-400" />
+            <span>Phone Camera Settings</span>
+          </button>
+          <button
             onClick={() => {
               setModalCameraId("CCTV_02");
               setIsConnectModalOpen(true);
@@ -74,6 +89,13 @@ export default function CamerasPage() {
           </div>
         </div>
       </div>
+
+      {/* Collapsible Phone Camera Settings Panel */}
+      {showPhoneSettings && (
+        <div className="animate-in fade-in duration-150">
+          <PhoneCameraSettings />
+        </div>
+      )}
 
       {/* Dual-Zone System Flow Blueprint Banner */}
       <div className="bg-[#0f141c] border border-blue-500/20 rounded-xl p-4 relative overflow-hidden">

@@ -25,7 +25,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   AlertOctagon,
+  Smartphone,
 } from "lucide-react";
+import { PhoneCameraSettings } from "./PhoneCameraSettings";
 
 export type DetectionState =
   | "HELMET_DETECTED"
@@ -74,6 +76,12 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [isStartingEngine, setIsStartingEngine] = useState(false);
   const [useSnapshotMode, setUseSnapshotMode] = useState(false);
   const [snapshotTimestamp, setSnapshotTimestamp] = useState(Date.now());
+  const [showPhoneSettings, setShowPhoneSettings] = useState(false);
+
+  const isCctv1 = useMemo(() => {
+    const id = (camera.camera_id || "").toLowerCase();
+    return id.includes("1") || id.includes("gate") || id === "cam_00";
+  }, [camera.camera_id]);
 
   // High-reliability snapshot polling fallback if MJPEG streaming stalls in browser
   useEffect(() => {
@@ -447,6 +455,22 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             <span>AI {showOverlay ? "ON" : "OFF"}</span>
           </button>
 
+          {!isCctv1 && (
+            <button
+              onClick={() => setShowPhoneSettings(!showPhoneSettings)}
+              className={cn(
+                "px-2.5 py-1 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-all min-h-[30px]",
+                showPhoneSettings
+                  ? "bg-cyan-500/25 text-cyan-200 border-cyan-400 shadow-sm"
+                  : "bg-cyan-500/10 text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/20"
+              )}
+              title="Configure Phone Camera IP Address & Stream Settings"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Phone IP</span>
+            </button>
+          )}
+
           <button
             onClick={() => {
               setStreamError(false);
@@ -464,6 +488,18 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Inline Collapsible Phone Camera Settings Panel */}
+      {showPhoneSettings && !isCctv1 && (
+        <div className="border-b border-[#26303C] animate-in fade-in duration-150">
+          <PhoneCameraSettings
+            onStreamUpdated={() => {
+              setStreamError(false);
+              setStreamKey((k) => k + 1);
+            }}
+          />
+        </div>
+      )}
 
       {/* Video Canvas Container (Strict 16:9 box with zero border overflow) */}
       <div className="relative w-full aspect-video bg-[#05080E] flex items-center justify-center overflow-hidden rounded-none border-0 select-none">

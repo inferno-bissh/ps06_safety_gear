@@ -44,6 +44,14 @@ def set_hazard_state(smoke: Optional[bool] = None, fire: Optional[bool] = None, 
         _HAZARD_STATE["last_updated"] = time.time()
 
 _STANDBY_CACHE: Dict[str, bytes] = {}
+_CAMERA_SOURCE_CALLBACK = None
+_CAMERA_STATUS_CALLBACK = None
+
+def register_camera_callbacks(source_callback=None, status_callback=None):
+    """Registers dynamic orchestrator callbacks to allow in-process stream reconfiguration without restarts."""
+    global _CAMERA_SOURCE_CALLBACK, _CAMERA_STATUS_CALLBACK
+    _CAMERA_SOURCE_CALLBACK = source_callback
+    _CAMERA_STATUS_CALLBACK = status_callback
 
 def _get_default_standby_frame(channel: str) -> bytes:
     if channel in _STANDBY_CACHE:
@@ -73,21 +81,24 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
 
         # 1. Health & Status
         if path == "" or path == "health":
+            body = b'{"status":"ONLINE","engine":"SafetyIntel MJPEG Streamer"}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(b'{"status":"ONLINE","engine":"SafetyIntel MJPEG Streamer"}')
+            self.wfile.write(body)
             return
 
         # 2. Live Active Workers State
         elif path == "api/workers" or path == "workers":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
             with _WORKERS_LOCK:
                 data = json.dumps(_ACTIVE_WORKERS).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
             self.wfile.write(data)
             return
 
@@ -108,31 +119,51 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
 
         # 4. Enrolled Face Roster
         elif path == "api/roster" or path == "api/enrolled":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
             try:
                 from face_engine import WorkerFaceEngine
                 fe = WorkerFaceEngine()
                 roster = fe.database.get("names", [])
             except Exception:
                 roster = []
-            self.wfile.write(json.dumps({"enrolled_workers": roster, "count": len(roster)}).encode("utf-8"))
+            body = json.dumps({"enrolled_workers": roster, "count": len(roster)}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         # 5. Live Hazard State (Smoke / Fire)
         elif path == "api/hazard" or path == "api/hazard/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
             with _HAZARD_LOCK:
                 data = json.dumps(_HAZARD_STATE).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
             self.wfile.write(data)
             return
 
-        # 6. Multipart MJPEG Streaming Channels
+        # 6. Live Camera Sources & Status
+        elif path == "api/cameras/source" or path == "api/cameras/status" or path == "api/camera/config":
+            data = {}
+            if _CAMERA_STATUS_CALLBACK:
+                try:
+                    data = _CAMERA_STATUS_CALLBACK()
+                except Exception as e:
+                    data = {"error": str(e)}
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # 7. Multipart MJPEG Streaming Channels
         channel = "composite"
         if "cctv1" in path:
             channel = "cctv1"
@@ -261,6 +292,39 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(resp)
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                return
+
+        elif "api/cameras/source" in path or "api/camera/config" in path:
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                payload = json.loads(post_data.decode("utf-8")) if post_data else {}
+                channel = payload.get("channel", "cctv2").lower()
+                source = payload.get("source", "").strip()
+                action = payload.get("action", "connect").lower()
+
+                if _CAMERA_SOURCE_CALLBACK:
+                    success, msg = _CAMERA_SOURCE_CALLBACK(channel, source, action)
+                    status_code = 200 if success else 400
+                    resp = json.dumps({"status": "SUCCESS" if success else "FAIL", "message": msg, "source": source})
+                else:
+                    status_code = 503
+                    resp = json.dumps({"status": "ERROR", "message": "Camera controller callback not registered"})
+
+                body = resp.encode("utf-8")
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
                 return
             except Exception as e:
                 self.send_response(500)

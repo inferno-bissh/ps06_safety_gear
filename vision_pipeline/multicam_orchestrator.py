@@ -5,6 +5,7 @@ import time
 import cv2
 import argparse
 import numpy as np
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
@@ -27,7 +28,35 @@ from stream_manager import ThreadedCameraStream, generate_synthetic_industrial_f
 from face_engine import WorkerFaceEngine
 from ppe_detector import WorkerPPEEvaluator
 from firestore_client import FirestoreSyncClient
-from web_streamer import WebStreamBroadcaster, get_hazard_state, set_hazard_state
+from web_streamer import (
+    WebStreamBroadcaster,
+    get_hazard_state,
+    set_hazard_state,
+    register_camera_callbacks,
+)
+
+CAMERA_CONFIG_FILE = BASE_DIR.parent / "camera_config.json"
+
+def load_camera_config() -> dict:
+    """Loads persistent camera configuration from camera_config.json."""
+    if CAMERA_CONFIG_FILE.exists():
+        try:
+            with open(CAMERA_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[Config Warning] Could not parse camera_config.json: {e}")
+    return {}
+
+def save_camera_config(data: dict):
+    """Safely updates persistent camera configuration on disk."""
+    try:
+        cur = load_camera_config()
+        cur.update(data)
+        cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with open(CAMERA_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cur, f, indent=2)
+    except Exception as e:
+        print(f"[Config Error] Failed to write camera_config.json: {e}")
 
 def normalize_camera_source(src, default="0"):
     if src is None:
@@ -60,6 +89,13 @@ class MultiCameraOrchestrator:
         self.test_mode = test_mode
         self.no_gui = no_gui
         self.demo_ppe_pass = demo_ppe_pass
+
+        # Check persistent camera_config.json on disk if defaults provided
+        saved_cfg = load_camera_config()
+        if (ward_src == "0" or ward_src == "http://192.168.1.5:8080/video") and "cctv2" in saved_cfg:
+            ward_src = saved_cfg["cctv2"]
+        if gate_src == "0" and "cctv1" in saved_cfg and saved_cfg["cctv1"] != "0":
+            gate_src = saved_cfg["cctv1"]
 
         gate_src = normalize_camera_source(gate_src, "0")
         ward_src = normalize_camera_source(ward_src, "http://192.168.1.5:8080/video")
@@ -138,6 +174,61 @@ class MultiCameraOrchestrator:
         self.web_broadcaster = WebStreamBroadcaster(host="0.0.0.0", port=5000)
         if not self.test_mode:
             self.web_broadcaster.start()
+
+        # 8. Register dynamic source update & status callbacks with web streamer
+        register_camera_callbacks(self.update_camera_source, self.get_cameras_status)
+
+    def update_camera_source(self, channel: str, source: str, action: str = "connect") -> tuple:
+        """
+        Dynamically updates a camera stream source on the fly without stopping the
+        orchestrator or dropping the laptop webcam / CCTV 1 feed.
+        """
+        ch = str(channel).lower()
+        if action == "disconnect":
+            if ch in ("cctv2", "ward", "cam_01"):
+                self.ward_stream.disconnect()
+                save_camera_config({"cctv2_status": "DISCONNECTED"})
+                return True, "CCTV 2 stream disconnected to standby mode"
+            elif ch in ("cctv1", "gate", "cam_00"):
+                self.gate_stream.disconnect()
+                save_camera_config({"cctv1_status": "DISCONNECTED"})
+                return True, "CCTV 1 stream disconnected to standby mode"
+            return False, f"Unknown camera channel: {channel}"
+
+        norm = normalize_camera_source(source, "0" if ch in ("cctv1", "gate") else "http://192.168.1.5:8080/video")
+        if ch in ("cctv2", "ward", "cam_01"):
+            self.ward_stream.update_source(norm)
+            ip_str = str(norm).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+            port_val = 8080
+            if ":" in str(norm).replace("http://", "").replace("https://", "").split("/")[0]:
+                try:
+                    port_val = int(str(norm).replace("http://", "").replace("https://", "").split("/")[0].split(":")[1])
+                except Exception:
+                    pass
+            save_camera_config({
+                "cctv2": str(norm),
+                "cctv2_ip": ip_str,
+                "cctv2_port": port_val,
+                "cctv2_endpoint": "/video",
+                "cctv2_status": "ONLINE",
+            })
+            return True, f"CCTV 2 phone stream dynamically switched to '{norm}'"
+        elif ch in ("cctv1", "gate", "cam_00"):
+            self.gate_stream.update_source(norm)
+            save_camera_config({"cctv1": str(norm), "cctv1_status": "ONLINE"})
+            return True, f"CCTV 1 stream dynamically switched to '{norm}'"
+
+        return False, f"Unknown camera channel: {channel}"
+
+    def get_cameras_status(self) -> dict:
+        """Returns live stream connectivity status across all camera channels."""
+        return {
+            "cctv1": self.gate_stream.get_status(),
+            "cctv2": self.ward_stream.get_status(),
+            "cctv3": self.cctv3_stream.get_status() if self.cctv3_stream else None,
+            "cctv4": self.cctv4_stream.get_status() if self.cctv4_stream else None,
+            "saved_config": load_camera_config(),
+        }
 
     def _redraw_gate_overlays(self, frame: np.ndarray, drawings: list):
         """Re-draws cached worker detection overlays onto the gate frame to ensure flicker-free rendering."""

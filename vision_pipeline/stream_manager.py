@@ -66,7 +66,7 @@ class ThreadedCameraStream:
         self.camera_id = camera_id
         self.src = int(src) if str(src).isdigit() else str(src)
         self.target_fps = target_fps
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         
         self.latest_frame: Optional[np.ndarray] = None
         self.latest_timestamp: float = 0.0
@@ -206,9 +206,62 @@ class ThreadedCameraStream:
                 return 0.0
             return time.time() - self.latest_timestamp
 
+    def update_source(self, new_src: Union[str, int]) -> bool:
+        """
+        Dynamically updates the stream source URL or device index in real time.
+        Safely releases previous video capture resources without terminating background worker.
+        """
+        if isinstance(new_src, str):
+            new_src = new_src.strip().strip('"').strip("'")
+            if (":8080" in new_src or ":4747" in new_src) and not any(ep in new_src for ep in ["/video", "/videofeed", "/mjpeg", "/feed"]):
+                new_src = new_src.rstrip("/") + "/video"
+        elif isinstance(new_src, (int, float)):
+            new_src = int(new_src)
+
+        with self.lock:
+            self.src = new_src
+            self.is_synthetic_mode = True
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+
+        print(f"[Stream Manager] Dynamically switched {self.camera_id} source to '{self.src}'. Triggering immediate reconnection...")
+        return True
+
+    def disconnect(self):
+        """Safely disconnects current stream and puts feed into standby synthetic mode."""
+        with self.lock:
+            self.src = "STANDBY"
+            self.is_synthetic_mode = True
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+        print(f"[Stream Manager] Disconnected stream for {self.camera_id}. Standby mode active.")
+
+    def get_status(self) -> dict:
+        """Returns live stream connectivity status and telemetry."""
+        with self.lock:
+            lat = 0.0
+            if self.latest_timestamp != 0.0:
+                lat = time.time() - self.latest_timestamp
+            return {
+                "camera_id": self.camera_id,
+                "source": str(self.src),
+                "is_connected": not self.is_synthetic_mode and self.cap is not None and self.cap.isOpened(),
+                "is_synthetic": self.is_synthetic_mode,
+                "frame_count": self.frame_count,
+                "latency_sec": round(lat, 3),
+            }
+
     def stop(self):
         """Stops background thread and releases hardware handles."""
         self.is_running = False
-        if hasattr(self, 'cap') and self.cap.isOpened():
+        if hasattr(self, 'cap') and self.cap is not None and self.cap.isOpened():
             self.cap.release()
         print(f"[Stream Closed] Released {self.camera_id}.")

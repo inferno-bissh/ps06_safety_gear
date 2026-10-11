@@ -47,14 +47,30 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    let cctv1 = body.cctv1 || "0";
-    let cctv2 = body.cctv2 || "http://192.168.1.5:8080/video";
+
+    // Read persistent camera_config.json if available
+    let projectRoot = process.cwd();
+    if (!fs.existsSync(path.join(projectRoot, "vision_pipeline"))) {
+      if (fs.existsSync(path.join(projectRoot, "..", "vision_pipeline"))) {
+        projectRoot = path.resolve(projectRoot, "..");
+      }
+    }
+    const configPath = path.join(projectRoot, "camera_config.json");
+    let savedConfig: Record<string, any> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        savedConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      } catch {}
+    }
+
+    let cctv1 = body.cctv1 || savedConfig.cctv1 || "0";
+    let cctv2 = body.cctv2 || savedConfig.cctv2 || "http://192.168.1.5:8080/video";
     const cctv3 = body.cctv3;
     const cctv4 = body.cctv4;
 
     // Sanitize against broadcast URLs containing :5000
-    if (String(cctv1).includes(":5000")) cctv1 = "0";
-    if (String(cctv2).includes(":5000")) cctv2 = "http://192.168.1.5:8080/video";
+    if (String(cctv1).includes(":5000")) cctv1 = savedConfig.cctv1 || "0";
+    if (String(cctv2).includes(":5000")) cctv2 = savedConfig.cctv2 || "http://192.168.1.5:8080/video";
 
     // Auto-normalize phone camera endpoints on port 8080 or 4747
     if (String(cctv2).startsWith("http://") && (String(cctv2).endsWith(":8080") || String(cctv2).endsWith(":8080/"))) {
@@ -81,11 +97,26 @@ export async function POST(req: NextRequest) {
     }
 
     if (alreadyActive && !body.forceRestart) {
+      // Forward dynamic stream update to live Python orchestrator on port 5000
+      let dynamicSwitched = false;
+      try {
+        const resSource = await fetch("http://localhost:5000/api/cameras/source", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: "cctv2", source: cctv2, action: "connect" }),
+          signal: AbortSignal.timeout(1500),
+        });
+        dynamicSwitched = resSource.ok;
+      } catch {}
+
       return NextResponse.json({
         success: true,
         alreadyRunning: true,
         isOnline: true,
-        message: "Python Vision Orchestrator is already active on port 5000",
+        dynamicSwitched,
+        message: dynamicSwitched
+          ? `Python Vision Orchestrator updated dynamically to: ${cctv2}`
+          : "Python Vision Orchestrator is active on port 5000",
         port: 5000,
         urls: {
           cctv1: "http://localhost:5000/video/cctv1",
@@ -95,7 +126,6 @@ export async function POST(req: NextRequest) {
     }
 
     // Determine project root directory robustly
-    let projectRoot = process.cwd();
     if (!fs.existsSync(path.join(projectRoot, "vision_pipeline"))) {
       if (fs.existsSync(path.join(projectRoot, "..", "vision_pipeline"))) {
         projectRoot = path.resolve(projectRoot, "..");

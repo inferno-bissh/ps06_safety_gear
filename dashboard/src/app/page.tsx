@@ -18,9 +18,11 @@ import {
   Layers,
   CheckCircle2,
   AlertTriangle,
+  Smartphone,
 } from "lucide-react";
 import Link from "next/link";
 import { ConnectCameraModal } from "@/components/ConnectCameraModal";
+import { PhoneCameraSettings } from "@/components/PhoneCameraSettings";
 
 export default function FacilityDashboardPage() {
   const {
@@ -36,6 +38,7 @@ export default function FacilityDashboardPage() {
 
   const [isConnectModalOpen, setIsConnectModalOpen] = React.useState(false);
   const [modalCameraId, setModalCameraId] = React.useState<string>("CCTV_02");
+  const [showPhoneCamSettings, setShowPhoneCamSettings] = React.useState(false);
 
   const cctv1 = cameras.find((c) => c.camera_id === "CCTV_01") || cameras[0];
   const cctv2 = cameras.find((c) => c.camera_id === "CCTV_02") || cameras[1] || cameras[0];
@@ -199,7 +202,20 @@ export default function FacilityDashboardPage() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowPhoneCamSettings(!showPhoneCamSettings)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm border",
+                showPhoneCamSettings
+                  ? "bg-cyan-500/25 border-cyan-400 text-cyan-200"
+                  : "bg-[#161F2B] hover:bg-slate-800 text-cyan-300 border-[#26303C]"
+              )}
+              title="Configure Phone Camera (CCTV 2) IP Address & Stream Settings"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Phone Camera Settings</span>
+            </button>
             <button
               onClick={() => {
                 setModalCameraId("CCTV_02");
@@ -220,6 +236,13 @@ export default function FacilityDashboardPage() {
             </Link>
           </div>
         </div>
+
+        {/* Collapsible Phone Camera Settings Section */}
+        {showPhoneCamSettings && (
+          <div className="animate-in fade-in duration-150">
+            <PhoneCameraSettings />
+          </div>
+        )}
 
         {/* Responsive CCTV Camera Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -1,0 +1,9 @@
+{
+  "cctv1": "0",
+  "cctv2": "http://192.168.1.5:8080/video",
+  "cctv2_ip": "192.168.1.5",
+  "cctv2_port": 8080,
+  "cctv2_endpoint": "/video",
+  "updated_at": "2026-10-11T18:55:00.946149+00:00",
+  "cctv2_status": "ONLINE"
+}
