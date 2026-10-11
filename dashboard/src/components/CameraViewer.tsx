@@ -59,6 +59,17 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [streamKey, setStreamKey] = useState(0);
 
   const [isStartingEngine, setIsStartingEngine] = useState(false);
+  const [useSnapshotMode, setUseSnapshotMode] = useState(false);
+  const [snapshotTimestamp, setSnapshotTimestamp] = useState(Date.now());
+
+  // High-reliability snapshot polling fallback if MJPEG streaming stalls in browser
+  useEffect(() => {
+    if (!useSnapshotMode || showFallbackSim || streamError) return;
+    const interval = setInterval(() => {
+      setSnapshotTimestamp(Date.now());
+    }, 80);
+    return () => clearInterval(interval);
+  }, [useSnapshotMode, showFallbackSim, streamError]);
 
   const defaultStreamEndpoint = useMemo(() => {
     const camId = (camera.camera_id || "").toLowerCase();
@@ -85,6 +96,17 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     }
     return target;
   }, [camera.stream_url, camera.camera_id, showFallbackSim, defaultStreamEndpoint]);
+
+  const snapshotUrl = useMemo(() => {
+    const camId = (camera.camera_id || "").toLowerCase();
+    const endpoint = camId.includes("1") || camId.includes("gate") ? "cctv1" : "cctv2";
+    let base = `http://localhost:5000/snapshot/${endpoint}`;
+    if (typeof window !== "undefined" && base.includes("localhost:5000")) {
+      const hostname = window.location.hostname || "localhost";
+      base = base.replace("localhost", hostname);
+    }
+    return `${base}?t=${snapshotTimestamp}`;
+  }, [camera.camera_id, snapshotTimestamp]);
 
   // When camera stream URL or status updates (e.g. user clicked Save & Connect in modal), reset error & reconnect
   useEffect(() => {
@@ -270,11 +292,29 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
           </div>
         )}
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setShowFallbackSim(!showFallbackSim);
+              setStreamError(false);
+              setStreamKey((k) => k + 1);
+            }}
+            className={cn(
+              "px-2.5 py-1 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-all min-h-[30px]",
+              showFallbackSim
+                ? "bg-amber-500/20 text-amber-300 border-amber-500/50"
+                : "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+            )}
+            title="Toggle between Live Hardware Webcam and Simulated Feed"
+          >
+            <Radio className="w-3 h-3" />
+            <span>{showFallbackSim ? "DEMO FEED" : "LIVE FEED"}</span>
+          </button>
+
           <button
             onClick={() => setShowOverlay(!showOverlay)}
             className={cn(
-              "px-3 py-1.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-all min-h-[30px]",
+              "px-2.5 py-1 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition-all min-h-[30px]",
               showOverlay
                 ? "bg-blue-600/20 text-blue-300 border-blue-500/50 shadow-sm"
                 : "bg-slate-800/80 text-slate-400 border-slate-700 hover:bg-slate-700"
@@ -282,11 +322,23 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             title="Toggle YOLOv8 AI inference bounding boxes"
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>AI Overlay {showOverlay ? "ON" : "OFF"}</span>
+            <span>AI {showOverlay ? "ON" : "OFF"}</span>
           </button>
 
-          <span className="text-[11px] bg-slate-800/80 text-slate-300 px-2 py-1 rounded-md font-mono-tabular font-semibold border border-slate-700/60">
-            {camera.fps} FPS · {camera.resolution}
+          <button
+            onClick={() => {
+              setStreamError(false);
+              setUseSnapshotMode(false);
+              setStreamKey((k) => k + 1);
+            }}
+            className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 min-h-[30px] min-w-[30px] flex items-center justify-center transition-colors"
+            title="Reconnect / Refresh Stream Socket"
+          >
+            <RefreshCw className="w-3 h-3" />
+          </button>
+
+          <span className="text-[11px] bg-slate-800/80 text-slate-300 px-2 py-1 rounded-md font-mono-tabular font-semibold border border-slate-700/60 hidden sm:inline">
+            {camera.fps} FPS
           </span>
         </div>
       </div>
@@ -334,14 +386,18 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             {/* Background Stream Feed Image */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              key={`${resolvedStreamUrl}-${streamKey}`}
-              src={resolvedStreamUrl}
+              key={`${resolvedStreamUrl}-${useSnapshotMode ? "snap" : "mjpeg"}-${streamKey}`}
+              src={showFallbackSim ? resolvedStreamUrl : useSnapshotMode ? snapshotUrl : resolvedStreamUrl}
               alt={camera.name}
               className="w-full h-full object-cover select-none"
               onLoad={() => setStreamError(false)}
               onError={() => {
                 if (!showFallbackSim) {
-                  setStreamError(true);
+                  if (!useSnapshotMode) {
+                    setUseSnapshotMode(true);
+                  } else {
+                    setStreamError(true);
+                  }
                 }
               }}
             />

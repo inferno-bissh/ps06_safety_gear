@@ -863,6 +863,27 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/firestore_client.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/firestore_client.py), [`vision_pipeline/main.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/main.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-11 (Session 47)
+- **Agent Focus:** Camera Blank Screen Resolution, Hardware Lock Release, Decoupled Stream Pipeline, and Standby Fallback Implementation.
+- **Key Decisions & Accomplishments:**
+  - **Released Hardware Webcam Lock from Stale Ghost Processes:**
+    - Diagnosed that two background Python processes (PID 13032 and PID 29164) had been holding the DirectShow webcam lock (`ActiveMovie Window`) for over 1 hour, causing any new capture attempts to receive blank/black frames (`mean_brightness: 0.0`).
+    - Force-killed both zombie processes and verified clean hardware capture via `cv2.VideoCapture(0, cv2.CAP_DSHOW)`: returned live frame `(480, 640, 3)` with mean brightness `96.5`.
+  - **Eliminated Multi-Camera Orchestrator Deadlock:**
+    - Root cause: In [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), `if gate_frame is None or ward_frame is None: continue` previously halted the entire loop if the secondary phone camera timed out or was offline. As a result, CCTV 1 (webcam) was never processed or updated to the web streamer.
+    - Solution: Decoupled camera ingestion. If either stream is not yet ready, it seamlessly generates an animated industrial simulation frame (`generate_synthetic_industrial_frame`). The laptop webcam streams continuously at 30 FPS regardless of phone connection state.
+  - **Resilient Web Streamer Standby Output:**
+    - In [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py): Added `_get_default_standby_frame(channel)`. Streams and snapshots now immediately deliver visual initializing frames instead of sending zero bytes to browser HTTP connections.
+  - **Dashboard Dual-Mode Stream & Reconnect Enhancements:**
+    - In [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx):
+      - Added high-speed JPEG snapshot polling fallback (`useSnapshotMode`) if multipart MJPEG streaming is blocked or stalls in the browser.
+      - Added interactive **`[DEMO FEED / LIVE FEED]`** toggle pill and **`[REFRESH]`** button directly in the camera viewer title bar for 1-click recovery.
+  - **Verification:**
+    - Tested `/snapshot/cctv1` (23,051 bytes) and `/snapshot/cctv2` (11,681 bytes) via HTTP: 200 OK.
+    - Verified `npx tsc --noEmit`: 0 errors.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents

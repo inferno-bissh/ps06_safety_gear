@@ -43,6 +43,22 @@ def set_hazard_state(smoke: Optional[bool] = None, fire: Optional[bool] = None, 
             _HAZARD_STATE["fire"] = fire
         _HAZARD_STATE["last_updated"] = time.time()
 
+_STANDBY_CACHE: Dict[str, bytes] = {}
+
+def _get_default_standby_frame(channel: str) -> bytes:
+    if channel in _STANDBY_CACHE:
+        return _STANDBY_CACHE[channel]
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    img[:] = (20, 26, 36)
+    cv2.rectangle(img, (20, 20), (620, 340), (45, 55, 72), 2)
+    label = f"[{channel.upper()}] INITIALIZING VIDEO FEED..."
+    cv2.putText(img, label, (40, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 220, 255), 2)
+    cv2.putText(img, "Connecting to camera hardware stream...", (40, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 180, 200), 1)
+    ret, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    data = jpeg.tobytes() if ret else b""
+    _STANDBY_CACHE[channel] = data
+    return data
+
 class MJPEGStreamHandler(BaseHTTPRequestHandler):
     """
     High-performance MJPEG HTTP Streamer.
@@ -80,18 +96,14 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
             cam = "cctv1" if "cctv1" in path else ("cctv2" if "cctv2" in path else "composite")
             with _FRAME_LOCK:
                 frame_bytes = _ACTIVE_FRAMES.get(cam) or _ACTIVE_FRAMES.get("cctv1") or _ACTIVE_FRAMES.get("composite")
-            if frame_bytes:
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Length", str(len(frame_bytes)))
-                self.end_headers()
-                self.wfile.write(frame_bytes)
-            else:
-                self.send_response(404)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(b"No frame available yet")
+            if not frame_bytes:
+                frame_bytes = _get_default_standby_frame(cam)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(frame_bytes)))
+            self.end_headers()
+            self.wfile.write(frame_bytes)
             return
 
         # 4. Enrolled Face Roster
@@ -147,13 +159,16 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
                 with _FRAME_LOCK:
                     frame_bytes = _ACTIVE_FRAMES.get(channel) or _ACTIVE_FRAMES.get("composite")
 
-                if frame_bytes is not None:
-                    self.wfile.write(b"--FRAME\r\n")
-                    self.send_header("Content-Type", "image/jpeg")
-                    self.send_header("Content-Length", str(len(frame_bytes)))
-                    self.end_headers()
-                    self.wfile.write(frame_bytes)
-                    self.wfile.write(b"\r\n")
+                if frame_bytes is None:
+                    frame_bytes = _get_default_standby_frame(channel)
+
+                chunk = (
+                    b"--FRAME\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(frame_bytes)).encode("ascii") + b"\r\n\r\n"
+                    + frame_bytes + b"\r\n"
+                )
+                self.wfile.write(chunk)
                 
                 # Stream at ~25-30 FPS
                 time.sleep(0.035)

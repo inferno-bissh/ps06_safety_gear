@@ -23,7 +23,7 @@ from config import (
     FIREBASE_PROJECT_ID,
     PERSON_CONF_THRESHOLD,
 )
-from stream_manager import ThreadedCameraStream
+from stream_manager import ThreadedCameraStream, generate_synthetic_industrial_frame
 from face_engine import WorkerFaceEngine
 from ppe_detector import WorkerPPEEvaluator
 from firestore_client import FirestoreSyncClient
@@ -629,9 +629,10 @@ class MultiCameraOrchestrator:
                 gate_frame, _ = self.gate_stream.get_latest_frame()
                 ward_frame, _ = self.ward_stream.get_latest_frame()
 
-                if gate_frame is None or ward_frame is None:
-                    time.sleep(0.02)
-                    continue
+                if gate_frame is None:
+                    gate_frame = generate_synthetic_industrial_frame(1280, 720, frame_idx, "CCTV_01_GATE")
+                if ward_frame is None:
+                    ward_frame = generate_synthetic_industrial_frame(1280, 720, frame_idx, "CCTV_02_WARD")
 
                 # 2. Process Gate stream (Entry access verification & PPE)
                 gate_workers = self.process_gate_stream(gate_frame) or []
