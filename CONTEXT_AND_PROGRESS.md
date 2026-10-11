@@ -950,15 +950,36 @@
   - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/PPEChip.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PPEChip.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
   - Created: [`scratch/test_helmet_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_helmet_fix.py)
 
+### Session: 2026-10-11 (Session 50)
+- **Agent Focus:** CCTV 1 Webcam Backlight Worker Detection Resolution and Inanimate Rejection Calibration.
+- **Key Decisions & Accomplishments:**
+  - **Live Diagnostics & Root Cause Analysis:**
+    - Live snapshot analysis (`scratch/live_cctv1_latest.jpg`) showed the user seated in front of the laptop webcam wearing a black T-shirt under backlit room conditions (bright wall/ceiling behind user, face and torso in dark shadow).
+    - YOLOv8 detected the user as a person with high confidence (`conf = 0.83`).
+    - However, because the user's face was heavily shadowed, YuNet face detector saw 0 faces (`matched_face is None`).
+    - Furthermore, in the shadow, color-based skin tone segmentation measured only `0.88%` skin.
+    - As a result, the inanimate object rejection block dropped the user's detection (`if matched_face is None and helmet != 'PASS' and vest != 'PASS' and skin < 0.045: continue`), mistakenly treating the backlit user as an inanimate hanging coat or backpack.
+    - Additionally, `gate_model.track` was previously hardcoded to `conf=0.42` rather than `PERSON_CONF_THRESHOLD` (`0.28`), and `detect_frame_ppe` was only running after candidate culling.
+  - **Engineering Resolution in [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py):**
+    - Updated `gate_model.track` to use `conf=PERSON_CONF_THRESHOLD` (`0.28`).
+    - Run `detect_frame_ppe` upfront so candidate worker boxes can be synthesized directly around detected helmets or vests if facial/person tracking is edge-occluded.
+    - Updated the inanimate object rejection condition to `conf < 0.52`: high-confidence YOLO person silhouettes (`conf >= 0.52`, e.g. user at 0.83) are recognized as genuine workers even under extreme backlighting or dark clothing where skin tone is in deep shadow. Low-confidence detections (`conf < 0.52`, e.g. hanging towels at 0.33) continue to be filtered out unless confirmed by face, skin, or PPE.
+  - **Validation:**
+    - Tested live user snapshot (`conf = 0.83`): 1 worker tracked with bounding box and `Helmet Not Detected` badge.
+    - Tested hanging cloth snapshot (`conf = 0.33`): 0 workers tracked (inanimate object successfully rejected).
+    - Verified live snapshot from running orchestrator daemon: bounding boxes and `GATE_WORKER_01` live overlays active.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Physical Webcam Verification:**
-   - Stand in front of laptop webcam (CCTV 1) wearing a safety helmet and verify the green bounding box and `Helmet Detected` badge.
-   - Remove the helmet and verify the amber/red bounding box and `Helmet Not Detected` badge.
-2. **Operations Console Dashboard:**
+1. **Operations Console Dashboard:**
    - Access [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) on LAN.
+2. **Physical Webcam Helmet Verification:**
+   - Put on the safety helmet in front of the laptop webcam to confirm the green `Helmet Detected` bounding box.
+
 
 
 

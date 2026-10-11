@@ -179,7 +179,7 @@ class MultiCameraOrchestrator:
             persist=True,
             classes=[0],
             tracker="bytetrack.yaml",
-            conf=0.42,
+            conf=PERSON_CONF_THRESHOLD,
             verbose=False,
         )
         boxes = []
@@ -244,13 +244,37 @@ class MultiCameraOrchestrator:
                     track_ids.append(new_id)
                     confidences.append(0.85)
 
+        # 3. Dedicated Neural YOLO PPE Detection
+        ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(gate_frame)
+
+        # 4. Helmet-Anchored Worker Candidate Fallback:
+        # If user is sitting close to webcam wearing a safety helmet (where COCO person model
+        # or YuNet face detector may be occluded by helmet brim or webcam cropping),
+        # synthesize a worker candidate box around the detected helmet!
+        if ppe_items:
+            for item in ppe_items:
+                if item["label"].lower() == "helmet":
+                    hx1, hy1, hx2, hy2 = item["box"]
+                    is_covered = any(
+                        bx1 <= ((hx1 + hx2) // 2) <= bx2 and by1 <= ((hy1 + hy2) // 2) <= by2
+                        for bx1, by1, bx2, by2 in boxes
+                    )
+                    if not is_covered:
+                        hw = hx2 - hx1
+                        hh = hy2 - hy1
+                        wx1 = max(0, hx1 - int(hw * 0.35))
+                        wy1 = max(0, hy1 - 10)
+                        wx2 = min(gw, hx2 + int(hw * 0.35))
+                        wy2 = min(gh, hy2 + int(hh * 3.5))
+                        new_id = (max(track_ids) + 1) if track_ids else 1
+                        boxes.append([wx1, wy1, wx2, wy2])
+                        track_ids.append(new_id)
+                        confidences.append(float(round(item["conf"], 2)))
+
         if not boxes:
             self.cached_gate_workers = []
             self.cached_gate_drawings = []
             return []
-
-        # Run dedicated neural YOLO PPE detection once for the gate frame
-        ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(gate_frame)
 
         gate_workers = []
         gate_drawings = []
@@ -302,7 +326,8 @@ class MultiCameraOrchestrator:
             # 1. Matched human face from YuNet detector
             # 2. Verified safety gear (Helmet PASS or Vest PASS)
             # 3. Measurable human skin tone in head/neck or body region (>= 4.5% skin)
-            if matched_face is None and ppe_res["helmet"] != "PASS" and ppe_res["vest"] != "PASS":
+            # 4. High-confidence person detection (conf >= 0.52)
+            if matched_face is None and ppe_res["helmet"] != "PASS" and ppe_res["vest"] != "PASS" and conf < 0.52:
                 # Check skin in head/neck region
                 check_h = max(25, int(head_h * 1.25))
                 head_check_crop = gate_frame[y1:min(gh, y1 + check_h), x1:x2]
