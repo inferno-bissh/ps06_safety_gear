@@ -45,6 +45,8 @@ interface SafetyContextType {
   isFirebaseAvailable: boolean;
   activeScenario: string | null;
   liveHazard: { smoke: boolean; fire: boolean; smoke_index: number };
+  isVisionEngineOnline: boolean;
+  telemetryError: boolean;
   // Actions
   toggleLiveHazard: (type: "smoke" | "fire" | "reset", active?: boolean, smokeIndex?: number) => Promise<void>;
   setDataSource: (source: "FIRESTORE" | "SIMULATION") => void;
@@ -224,30 +226,6 @@ const initialGateLogs: GateLogEntry[] = [
 
 const initialWorkers: WorkerTrack[] = [
   {
-    worker_track_id: "TRACK_01",
-    camera_id: "CCTV_01",
-    zone_id: "GATE_ZONE",
-    first_seen: new Date(Date.now() - 1800000).toISOString(),
-    last_seen: new Date().toISOString(),
-    status: "ACTIVE",
-    confidence: 0.96,
-    ppe: {
-      helmet: "FAIL",
-      vest: "UNKNOWN",
-      gloves: "FAIL",
-      safety_shoes: "UNKNOWN",
-    },
-    bbox: {
-      x: 32,
-      y: 18,
-      width: 36,
-      height: 68,
-      label: "Worker [TRACK_01]",
-      confidence: 0.96,
-      color: "#f59e0b",
-    },
-  },
-  {
     worker_track_id: "TRACK_22",
     camera_id: "CCTV_02",
     zone_id: "WELDING_ZONE",
@@ -392,6 +370,8 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     fire: false,
     smoke_index: 0.0,
   });
+  const [isVisionEngineOnline, setIsVisionEngineOnline] = useState(false);
+  const [telemetryError, setTelemetryError] = useState(false);
   
   // Dual-mode state: Firestore vs Simulation
   const [dataSource, setDataSource] = useState<"FIRESTORE" | "SIMULATION">("SIMULATION");
@@ -487,34 +467,49 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const syncLiveWorkers = async () => {
       try {
         const res = await fetch("/api/cameras/workers");
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (isMounted) {
+            setIsVisionEngineOnline(false);
+            setTelemetryError(true);
+          }
+          return;
+        }
         const data = await res.json();
-        if (isMounted && data.success && Array.isArray(data.workers) && data.workers.length > 0) {
-          setWorkers((prev) => {
-            const liveMap = new Map<string, WorkerTrack>();
-            // Add live detected workers
-            data.workers.forEach((w: WorkerTrack) => {
-              liveMap.set(w.worker_track_id, w);
+        if (isMounted) {
+          if (data.success && Array.isArray(data.workers)) {
+            setIsVisionEngineOnline(true);
+            setTelemetryError(false);
+            setWorkers((prev) => {
+              const liveMap = new Map<string, WorkerTrack>();
+              // Add live detected workers from live orchestrator
+              data.workers.forEach((w: WorkerTrack) => {
+                liveMap.set(w.worker_track_id, w);
+              });
+              // Retain demo/other camera workers (e.g. CCTV_03, CCTV_04) if not part of active live orchestrator channels
+              prev.forEach((oldW) => {
+                if (
+                  !liveMap.has(oldW.worker_track_id) &&
+                  oldW.camera_id !== "CCTV_01" &&
+                  oldW.camera_id !== "CCTV_02"
+                ) {
+                  liveMap.set(oldW.worker_track_id, oldW);
+                }
+              });
+              return Array.from(liveMap.values());
             });
-            // Retain demo/other camera workers if not in active live frames
-            prev.forEach((oldW) => {
-              if (
-                !liveMap.has(oldW.worker_track_id) &&
-                oldW.camera_id !== "CCTV_01" &&
-                oldW.camera_id !== "CCTV_02"
-              ) {
-                liveMap.set(oldW.worker_track_id, oldW);
-              }
-            });
-            return Array.from(liveMap.values());
-          });
+          } else {
+            setIsVisionEngineOnline(false);
+          }
         }
       } catch {
-        // Broadcaster temporarily unavailable
+        if (isMounted) {
+          setIsVisionEngineOnline(false);
+          setTelemetryError(true);
+        }
       }
     };
 
-    const workerInterval = setInterval(syncLiveWorkers, 600);
+    const workerInterval = setInterval(syncLiveWorkers, 400);
     return () => {
       isMounted = false;
       clearInterval(workerInterval);
@@ -1022,6 +1017,8 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         isFirebaseAvailable,
         activeScenario,
         liveHazard,
+        isVisionEngineOnline,
+        telemetryError,
         toggleLiveHazard,
         setDataSource,
         seedFirestore,

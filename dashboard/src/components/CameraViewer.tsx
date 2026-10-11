@@ -20,7 +20,20 @@ import {
   Radio,
   Plus,
   Play,
+  UserCheck,
+  UserX,
+  AlertTriangle,
+  CheckCircle2,
+  AlertOctagon,
 } from "lucide-react";
+
+export type DetectionState =
+  | "HELMET_DETECTED"
+  | "HELMET_NOT_DETECTED"
+  | "PERSON_NOT_DETECTED"
+  | "CHECKING_MODEL_LOADING"
+  | "CAMERA_DISCONNECTED"
+  | "DETECTION_ERROR";
 
 const FALLBACK_IMAGES: Record<string, string> = {
   CCTV_01: "https://images.unsplash.com/photo-1541888946425-d0fbb186c5f8?auto=format&fit=crop&w=1200&q=80",
@@ -48,7 +61,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   className,
   onConnectIp,
 }) => {
-  const { updateCameraName } = useSafety();
+  const { updateCameraName, isVisionEngineOnline, telemetryError } = useSafety();
   const [showOverlay, setShowOverlay] = useState(true);
   const [isHovered, setIsHovered] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -181,19 +194,19 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       const wCam = (w.camera_id || "").toUpperCase();
       if (wCam === targetId) return true;
       if (
-        (targetId === "CCTV_01" || targetId.includes("GATE")) &&
+        (targetId === "CCTV_01" || targetId.includes("GATE") || targetId === "CAM_00" || targetId.includes("CCTV1")) &&
         (wCam === "CAM_00" || wCam === "GATE" || wCam.includes("CCTV_01") || wCam.includes("CCTV1") || wCam === "CAM_00_GATE")
       ) return true;
       if (
-        (targetId === "CCTV_02" || targetId.includes("WARD") || targetId.includes("FRONT")) &&
+        (targetId === "CCTV_02" || targetId.includes("WARD") || targetId.includes("FRONT") || targetId === "CAM_01" || targetId.includes("CCTV2")) &&
         (wCam === "CAM_01" || wCam === "WARD" || wCam === "FRONT" || wCam.includes("CCTV_02") || wCam.includes("CCTV2") || wCam === "CAM_01_WARD")
       ) return true;
       if (
-        (targetId === "CCTV_03" || targetId.includes("LEFT")) &&
+        (targetId === "CCTV_03" || targetId.includes("LEFT") || targetId === "CAM_02" || targetId.includes("CCTV3")) &&
         (wCam === "CAM_02" || wCam.includes("CCTV_03") || wCam.includes("CCTV3"))
       ) return true;
       if (
-        (targetId === "CCTV_04" || targetId.includes("RIGHT")) &&
+        (targetId === "CCTV_04" || targetId.includes("RIGHT") || targetId === "CAM_03" || targetId.includes("CCTV4")) &&
         (wCam === "CAM_03" || wCam.includes("CCTV_04") || wCam.includes("CCTV4"))
       ) return true;
       return false;
@@ -201,10 +214,108 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   }, [workers, camera.camera_id]);
   const isOffline = camera.status === "OFFLINE";
 
+  // Compute 6-State Reliable AI PPE Detection Status
+  const currentDetectionState = useMemo<DetectionState>(() => {
+    if (camera.status === "OFFLINE" || streamError) {
+      return "CAMERA_DISCONNECTED";
+    }
+    if (isStartingEngine) {
+      return "CHECKING_MODEL_LOADING";
+    }
+    if (telemetryError && !showFallbackSim) {
+      return "DETECTION_ERROR";
+    }
+    if (!isVisionEngineOnline && !showFallbackSim) {
+      return "CHECKING_MODEL_LOADING";
+    }
+    if (zoneWorkers.length === 0) {
+      return "PERSON_NOT_DETECTED";
+    }
+    const hasHelmet = zoneWorkers.some((w) => w.ppe?.helmet === "PASS");
+    if (hasHelmet) {
+      return "HELMET_DETECTED";
+    }
+    return "HELMET_NOT_DETECTED";
+  }, [
+    camera.status,
+    streamError,
+    isStartingEngine,
+    telemetryError,
+    isVisionEngineOnline,
+    showFallbackSim,
+    zoneWorkers,
+  ]);
+
+  // Temporal smoothing across consecutive frames (300ms debounce to eliminate flicker while preserving real-time accuracy)
+  const [smoothedState, setSmoothedState] = useState<DetectionState>(currentDetectionState);
+
+  useEffect(() => {
+    if (
+      currentDetectionState === "CAMERA_DISCONNECTED" ||
+      currentDetectionState === "CHECKING_MODEL_LOADING"
+    ) {
+      setSmoothedState(currentDetectionState);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setSmoothedState(currentDetectionState);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [currentDetectionState]);
+
+  const badgeInfo = useMemo(() => {
+    switch (smoothedState) {
+      case "HELMET_DETECTED":
+        return {
+          label: "Helmet Detected",
+          borderBadge: "bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-emerald-950/30",
+          dotColor: "bg-emerald-400",
+          icon: CheckCircle2,
+        };
+      case "HELMET_NOT_DETECTED":
+        return {
+          label: "Helmet Not Detected",
+          borderBadge: "bg-red-500/20 text-red-300 border-red-500/50 shadow-red-950/30",
+          dotColor: "bg-red-400",
+          icon: AlertTriangle,
+        };
+      case "PERSON_NOT_DETECTED":
+        return {
+          label: "Person Not Detected",
+          borderBadge: "bg-slate-800 text-slate-300 border-slate-700",
+          dotColor: "bg-slate-400",
+          icon: UserX,
+        };
+      case "CHECKING_MODEL_LOADING":
+        return {
+          label: "Checking / Model Loading",
+          borderBadge: "bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse",
+          dotColor: "bg-amber-400 animate-spin",
+          icon: RefreshCw,
+        };
+      case "CAMERA_DISCONNECTED":
+        return {
+          label: "Camera Disconnected",
+          borderBadge: "bg-zinc-800/80 text-zinc-400 border-zinc-700/60",
+          dotColor: "bg-zinc-500",
+          icon: WifiOff,
+        };
+      case "DETECTION_ERROR":
+        return {
+          label: "Detection Error",
+          borderBadge: "bg-rose-500/20 text-rose-300 border-rose-500/50",
+          dotColor: "bg-rose-500",
+          icon: AlertOctagon,
+        };
+    }
+  }, [smoothedState]);
+
   return (
     <div
       className={cn(
-        "rounded-lg overflow-hidden border border-[#26303C] bg-[#0E131A] font-mono flex flex-col shadow-lg transition-all",
+        "rounded-xl overflow-hidden border border-[#26303C] bg-[#0E131A] font-mono flex flex-col shadow-lg transition-all w-full max-w-full",
         hasFireHazard && "border-red-600 ring-2 ring-red-500/50 shadow-red-950/40 animate-pulse",
         !hasFireHazard && hasSmokeHazard && "border-amber-500 ring-2 ring-amber-500/50 shadow-amber-950/40",
         className
@@ -279,6 +390,17 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
               </button>
             )}
             <span className="text-slate-400 text-xs font-mono-tabular">({camera.camera_id})</span>
+            {/* 6-State Reliable AI PPE Detection Status Badge */}
+            <div
+              className={cn(
+                "px-2.5 py-0.5 text-xs font-bold border rounded-lg flex items-center gap-1.5 shadow-sm transition-all",
+                badgeInfo.borderBadge
+              )}
+              title={`Detection Status: ${badgeInfo.label}`}
+            >
+              <badgeInfo.icon className="w-3.5 h-3.5 flex-shrink-0" />
+              <span>{badgeInfo.label}</span>
+            </div>
             {hasFireHazard && (
               <span className="flex items-center gap-1 text-[11px] font-extrabold bg-red-600/30 text-red-300 border border-red-500/60 px-2 py-0.5 rounded-md animate-pulse">
                 <Flame className="w-3.5 h-3.5 text-red-400" /> FIRE [P3]
@@ -343,8 +465,8 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
         </div>
       </div>
 
-      {/* Video Canvas Container */}
-      <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+      {/* Video Canvas Container (Strict 16:9 box with zero border overflow) */}
+      <div className="relative w-full aspect-video bg-[#05080E] flex items-center justify-center overflow-hidden rounded-none border-0 select-none">
         {isOffline ? (
           <div className="text-center p-6 space-y-2.5">
             <WifiOff className="w-10 h-10 text-slate-600 mx-auto animate-pulse" />
@@ -383,13 +505,13 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
           </div>
         ) : (
           <>
-            {/* Background Stream Feed Image */}
+            {/* Background Stream Feed Image (Fit precisely inside container, aspect preserved, zero overflow) */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               key={`${resolvedStreamUrl}-${useSnapshotMode ? "snap" : "mjpeg"}-${streamKey}`}
               src={showFallbackSim ? resolvedStreamUrl : useSnapshotMode ? snapshotUrl : resolvedStreamUrl}
               alt={camera.name}
-              className="w-full h-full object-cover select-none"
+              className="w-full h-full object-contain block max-w-full max-h-full select-none"
               onLoad={() => setStreamError(false)}
               onError={() => {
                 if (!showFallbackSim) {
@@ -401,6 +523,21 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 }
               }}
             />
+
+            {/* Real-time AI Status HUD Badge in Video Canvas */}
+            {!streamError && (
+              <div className="absolute top-2 right-2 z-10 pointer-events-none">
+                <div
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-bold border rounded-md backdrop-blur-md flex items-center gap-1.5 shadow-lg",
+                    badgeInfo.borderBadge
+                  )}
+                >
+                  <span className={cn("w-2 h-2 rounded-full", badgeInfo.dotColor)} />
+                  <span>{badgeInfo.label}</span>
+                </div>
+              </div>
+            )}
 
             {/* AI Bounding Boxes & Tracking Layer */}
             {showOverlay && (
@@ -427,6 +564,8 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 {zoneWorkers.map((worker) => {
                   if (!worker.bbox) return null;
                   const isViolation = Object.values(worker.ppe).includes("FAIL");
+                  const isNearTop = (worker.bbox.y ?? 0) < 8;
+                  const isNearBottom = ((worker.bbox.y ?? 0) + (worker.bbox.height ?? 0)) > 90;
 
                   return (
                     <div
@@ -444,10 +583,11 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                         height: `${worker.bbox.height}%`,
                       }}
                     >
-                      {/* Worker Tracker Header Tag */}
+                      {/* Worker Tracker Header Tag (Clamped inside box if near top border) */}
                       <div
                         className={cn(
-                          "absolute -top-6 left-0 text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap flex items-center gap-1",
+                          "absolute text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap flex items-center gap-1 shadow-sm z-10",
+                          isNearTop ? "top-1 left-1" : "-top-6 left-0",
                           isViolation ? "bg-amber-500 text-slate-950" : "bg-blue-600 text-white"
                         )}
                       >
@@ -455,8 +595,13 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                         <span>{worker.worker_track_id} ({((worker.confidence ?? 0.88) * 100).toFixed(0)}%)</span>
                       </div>
 
-                      {/* PPE Inspection Tag at bottom */}
-                      <div className="absolute -bottom-6 left-0 flex gap-1 flex-wrap">
+                      {/* PPE Inspection Tag at bottom (Clamped inside box if near bottom border) */}
+                      <div
+                        className={cn(
+                          "absolute flex gap-1 flex-wrap z-10",
+                          isNearBottom ? "bottom-1 left-1" : "-bottom-6 left-0"
+                        )}
+                      >
                         <span
                           className={cn(
                             "text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider",
@@ -613,7 +758,12 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
         </div>
 
         {zoneWorkers.length === 0 ? (
-          <div className="text-[11px] text-slate-500 py-1">No personnel detected in camera frame.</div>
+          <div className="text-[11px] text-slate-400 py-1.5 flex items-center justify-between">
+            <span>No personnel currently detected in camera frame.</span>
+            <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold border", badgeInfo.borderBadge)}>
+              {badgeInfo.label}
+            </span>
+          </div>
         ) : (
           <div className="space-y-1.5">
             {zoneWorkers.map((w) => (

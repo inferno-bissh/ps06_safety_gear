@@ -971,6 +971,36 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+
+### Session: 2026-10-11 (Session 51)
+- **Agent Focus:** Full Resolution of CCTV 1 Helmet Detection Pipeline, 6-State Reliable AI Status Implementation (Issue 1), and Camera Frame Border Containment with Aspect Ratio Alignment (Issue 2).
+- **Key Decisions & Accomplishments:**
+  - **Issue 1 Root Causes Identified & Fixed:**
+    1. *Stale Frontend Cache:* `initialWorkers` in [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx) contained a static mock `TRACK_01` on `CCTV_01` with `helmet: "FAIL"`. Because `syncLiveWorkers` checked `if (data.workers.length > 0)`, whenever the camera detected 0 persons (or before model output), `setWorkers` was never called, permanently displaying the stale "Helmet Not Detected" box. Fixed: Removed mock `TRACK_01` and updated sync logic to clear workers when the live feed contains 0 personnel.
+    2. *Model Confidence Calibration:* Tested [`vision_pipeline/yolov8n_ppe.pt`](file:///c:/Users/dehur/ps_06/vision_pipeline/yolov8n_ppe.pt) (classes: `{0: 'Gloves', 1: 'Vest', 2: 'goggles', 3: 'helmet', 4: 'mask', 5: 'safety_shoe'}`). Genuine hardhats under indoor webcam lighting score $0.16$–$0.35$, whereas `HELMET_CONF_THRESHOLD` was $0.42$. Calibrated threshold to $0.16$.
+    3. *Crown ROI Elevation:* In [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), the crown ROI cutoff previously clipped helmet domes and allowed forehead skin to bleed into sampling. Recalibrated to $sy_1 = \max(0, fy - 1.15 \cdot fh)$ and $sy_2 = \max(0, fy - 0.05 \cdot fh)$.
+    4. *Inanimate Filter & Backlight Handling:* High-confidence person detections ($\text{conf} \ge 0.52$) are preserved even when backlit without YuNet faces, while early helmet detections synthesize worker candidate boxes.
+    5. *Camera ID Normalization:* In [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), corrected `zoneWorkers` to properly match `CCTV_01` (`CAM_00`, `GATE`, `CCTV1`) and `CCTV_02` (`CAM_01`, `WARD`, `FRONT`).
+  - **Implemented 6-State Reliable AI Detection Status:**
+    - `Helmet Detected`: Shown only when a detected person has a valid model helmet detection (`PASS`).
+    - `Helmet Not Detected`: Shown only when a person is visible and processed, but no helmet is detected (`FAIL`).
+    - `Person Not Detected`: Shown when no person is present in the frame.
+    - `Checking / Model Loading`: Shown while the vision engine is initializing or starting.
+    - `Camera Disconnected`: Shown when the camera stream is offline or disconnected.
+    - `Detection Error`: Shown when the API or inference engine fails.
+    - Applied 300ms temporal smoothing to prevent rapid single-frame flickering across head movements.
+  - **Issue 2 Camera Frame Border Alignment Fixed:**
+    - Outer container updated to `w-full max-w-full rounded-xl overflow-hidden`.
+    - Inner video container set to strict 16:9 ratio (`w-full aspect-video bg-[#05080E] overflow-hidden`).
+    - Stream `<img>` changed from `object-cover` (which cropped helmet tops and OpenCV text) to `w-full h-full object-contain block max-w-full max-h-full select-none`. Matches the 640x360 stream aspect ratio with zero overflow, zero gaps, and perfectly aligned bounding boxes.
+    - Clamped bounding box tags: when `worker.bbox.y < 8%`, header tags position at `top-1 left-1` inside the box instead of `-top-6 left-0`, preventing border overflow and clipping. Bottom PPE tags similarly clamped when near bottom border.
+  - **Testing & Verification:**
+    - Unit tests in [`scratch/test_helmet_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_helmet_fix.py): 4/4 test cases passed (Worker with Helmet -> PASS, Baseball Cap -> FAIL, Bare Hair -> FAIL).
+    - API validation: `/health` (ONLINE), `/api/workers` (`[]`), `/api/cameras/workers` (`success: true`).
+    - TypeScript validation: `npx tsc --noEmit` passed with 0 errors.
+- **Files Modified:**
+  - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
@@ -978,7 +1008,7 @@
 1. **Operations Console Dashboard:**
    - Access [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) on LAN.
 2. **Physical Webcam Helmet Verification:**
-   - Put on the safety helmet in front of the laptop webcam to confirm the green `Helmet Detected` bounding box.
+   - Put on the safety helmet in front of the laptop webcam (CCTV 1) to observe the green `Helmet Detected` badge and bounding box. Step away to verify `Person Not Detected`.
 
 
 
