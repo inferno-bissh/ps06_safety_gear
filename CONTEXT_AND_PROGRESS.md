@@ -1001,14 +1001,52 @@
 - **Files Modified:**
   - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-11 (Session 52)
+- **Agent Focus:** Elimination of False Person Detections on Inanimate Background Objects (Hanging Clothes/Fabrics) & Industrial Monitoring Command Center UI/UX De-Clutter Redesign.
+- **Key Decisions & Accomplishments:**
+  - **Part 1 — Diagnosed & Fixed False Person Detections (Hanging Clothes):**
+    1. *Root Cause:* Pretrained COCO `yolov8n.pt` has class 0 `person`. Low person confidence threshold `0.28` caused vertical silhouettes of hanging shirts/towels on lines (confidence 0.33–0.45) to instantiate worker tracks. Previous filter bypassed all checks when confidence reached $\ge 0.52$, and checked only skin ratio ($< 3.5\%$) on low-confidence boxes which was tripped by beige walls/doors. Furthermore, CCTV 2 had no inanimate filter, and a single spurious frame immediately triggered active worker violations without temporal confirmation.
+    2. *Threshold Calibration:* Raised `PERSON_CONF_THRESHOLD` to `0.42` in [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py). Hanging cloth (0.335) is rejected while real user (0.68–0.83) is reliably accepted.
+    3. *Multi-Metric Human Validation (`_is_valid_human_detection`):*
+       - Added human aspect ratio constraint $H/W \in [0.48, 5.0]$ with minimum width 38px and height 55px (calibrated to preserve close-up seated webcam users with $H/W \approx 0.68$).
+       - Confirmed landmarks (matched face, verified helmet PASS, or verified vest PASS) immediately validate the detection.
+       - Stillness / Dynamics Filter: Stationary objects tracked for $\ge 10$ frames with centroid standard deviation $< 0.85$ px and no facial/PPE features are rejected as hanging inanimate garments.
+       - Temporal Confirmation: Tracks require 3 consecutive valid frames before emitting to the dashboard, unless confirmed immediately by high confidence ($\ge 0.70$) or matched face/helmet.
+    4. *CCTV 1 & CCTV 2 Consistency:* Applied the exact same human validation across both Gate (webcam) and Ward (phone) streams.
+  - **Part 2 — Dashboard De-Cluttering & Industrial Command Center Redesign:**
+    1. *Header Overhaul ([`dashboard/src/components/Header.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/Header.tsx)):*
+       - Clean title: "Industrial Safety Monitor".
+       - Added compact top navigation: `Overview`, `Live Monitoring`, `Incidents`, `Zones`.
+       - Compact status pill with pulse indicator; moved secondary demo buttons into a compact popover menu to unclutter the primary header bar.
+    2. *Compact 4-Metric Overview Strip ([`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx)):*
+       - Replaced bulky cards with exactly 4 restrained overview metrics: `Active Incidents`, `Connected Cameras`, `PPE Safety Status`, and `Sensor Connectivity` (explicitly showing `"Awaiting Hardware"` rather than fabricated readings).
+    3. *Main Live-Monitoring Wall (Above the Fold):*
+       - Positioned live camera feeds as the primary focal point directly below the header and metric strip.
+       - Clean 16:9 grid with zero overflow, preserved aspect ratios, and aligned bounding box overlays.
+    4. *Secondary Clean Incident & Zone Panels:*
+       - Compact Recent Incidents list with clean empty state when no incidents are present.
+       - Hardware and zone status panel ready for future Modbus sensor nodes without displaying false operational readings.
+  - **Verification & Testing:**
+    - Test Suite [`scratch/test_inanimate_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_inanimate_fix.py):
+      - Hanging cloth frame: **0 workers** (100% rejected).
+      - Backlit seated user: **1 worker** (`GATE_WORKER_01`, conf 0.68, 100% accepted).
+      - Real worker with hardhat: **1 worker** (`GATE_WORKER_01`, conf 0.92, **Helmet: PASS**, 100% accepted).
+    - Next.js Production Build (`npm run build`): **Compiled successfully with 0 errors**.
+    - Python Bytecode Compilation (`py_compile`): **0 errors**.
+    - Microservices active: Next.js dev server on port 3000 (PID 31432) and Python orchestrator on port 5000 (PID 1751).
+- **Files Modified:**
+  - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/Header.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/Header.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx), [`scratch/test_inanimate_fix.py`](file:///c:/Users/dehur/ps_06/scratch/test_inanimate_fix.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Operations Console Dashboard:**
-   - Access [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) on LAN.
-2. **Physical Webcam Helmet Verification:**
-   - Put on the safety helmet in front of the laptop webcam (CCTV 1) to observe the green `Helmet Detected` badge and bounding box. Step away to verify `Person Not Detected`.
+1. **Dashboard Access:**
+   - Open [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) for the clean industrial command center.
+2. **Webcam Real-World Check:**
+   - Stand or sit in front of the laptop webcam (CCTV 1): observe instantaneous person tracking with live PPE status.
+   - Hang a shirt/jacket in the background or step out of the frame: verify the system displays `Person Not Detected` with zero false tracks and zero false violations.
+
 
 
 

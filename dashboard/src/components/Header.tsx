@@ -84,16 +84,16 @@ export const Header: React.FC = () => {
 
       {/* Main Header Bar */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 gap-3 flex-wrap">
-        {/* Left: Branding & Facility Context */}
-        <div className="flex items-center gap-3">
+        {/* Left: Branding & Simple Navigation */}
+        <div className="flex items-center gap-4">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center border border-blue-400/40 shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
               <ShieldAlert className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-sm tracking-wider text-slate-100 uppercase">
-                  SafetyIntel OS
+                <span className="font-extrabold text-sm sm:text-base tracking-wider text-slate-100 uppercase">
+                  Industrial Safety Monitor
                 </span>
                 <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded font-mono font-bold">
                   PS-06
@@ -106,6 +106,27 @@ export const Header: React.FC = () => {
               </p>
             </div>
           </Link>
+
+          {/* Top Quick Navigation */}
+          <nav className="hidden xl:flex items-center gap-1 bg-[#161F2B] border border-[#26303C] rounded-lg p-1 text-xs">
+            <Link href="/" className="px-3 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors font-semibold">
+              Overview
+            </Link>
+            <Link href="/cameras" className="px-3 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors font-semibold">
+              Live Monitoring
+            </Link>
+            <Link href="/incidents" className="px-3 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors font-semibold flex items-center gap-1.5">
+              <span>Incidents</span>
+              {openIncidents.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-slate-950 font-bold">
+                  {openIncidents.length}
+                </span>
+              )}
+            </Link>
+            <Link href="/zones" className="px-3 py-1 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors font-semibold">
+              Zones
+            </Link>
+          </nav>
         </div>
 
         {/* Center: Live Telemetry, Network Badge & Siren Status */}

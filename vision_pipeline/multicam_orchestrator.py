@@ -113,6 +113,8 @@ class MultiCameraOrchestrator:
         # 6. Stateful Memory & Session Tables
         self.active_checked_in_workers: Dict[str, dict] = {}
         self.violation_counters: Dict[int, int] = {}
+        self.track_motion_history: Dict[str, list] = {}
+        self.track_confirmations: Dict[str, int] = {}
         self.last_gate_eval_time: float = 0.0
         self.cached_gate_workers = []
         self.cached_gate_drawings = []
@@ -156,6 +158,66 @@ class MultiCameraOrchestrator:
                 ty1 = max(18, cy1 - 4)
                 cv2.rectangle(frame, (cx1, ty1 - th - 4), (cx1 + tw + 6, ty1), (15, 20, 28), -1)
                 cv2.putText(frame, h_txt, (cx1 + 3, ty1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_col, 1)
+
+    def _is_valid_human_detection(
+        self,
+        frame: np.ndarray,
+        bbox: tuple,
+        conf: float,
+        matched_face: Optional[tuple],
+        ppe_res: dict,
+        track_id: int,
+        cam_id: str,
+    ) -> bool:
+        """
+        Multi-layered human verification: Eliminates false person detections caused by
+        hanging clothes, jackets on hangers, curtains, chairs, and background items, while
+        reliably preserving genuine workers across distances, clothing styles, and lighting.
+        """
+        x1, y1, x2, y2 = bbox
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        ar = bh / float(bw)
+
+        # 1. Bounding box size and aspect ratio
+        # A seated or standing human in front of camera has aspect ratio in [0.48, 5.0].
+        # Discard extreme horizontal ribbons (ar < 0.48) or tiny edge artifacts (bw < 38 or bh < 55)
+        if bw < 38 or bh < 55 or ar < 0.48 or ar > 5.0:
+            return False
+
+        # 2. Confirmed Human Landmarks (Face, Helmet, or Vest immediately pass)
+        if matched_face is not None:
+            return True
+        if ppe_res.get("helmet") == "PASS" or ppe_res.get("vest") == "PASS":
+            return True
+
+        # 3. Confidence gating for unverified candidates (no face, no helmet, no vest)
+        # Background fabric/clothes on hooks typically produce low-confidence noise (< 0.42)
+        if conf < 0.42:
+            return False
+
+        # 4. Motion Dynamics & Stillness Filter:
+        # Inanimate objects (clothes on hangers, bags on hooks) are 100% stationary across frames.
+        # Real humans (even when sitting still) exhibit micro-motion from breathing and posture.
+        track_key = f"{cam_id}_{track_id}"
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        history = self.track_motion_history.setdefault(track_key, [])
+        history.append((cx, cy))
+        if len(history) > 15:
+            history.pop(0)
+
+        # If we have tracked this candidate across 10+ frames:
+        if len(history) >= 10:
+            xs = [p[0] for p in history]
+            ys = [p[1] for p in history]
+            std_x = float(np.std(xs))
+            std_y = float(np.std(ys))
+            total_motion = float(np.sqrt(std_x**2 + std_y**2))
+            # Completely motionless (< 0.85px variance) with NO face and NO safety gear -> stationary hanging garment!
+            if total_motion < 0.85 and conf < 0.70:
+                return False
+
+        return True
 
     def process_gate_stream(self, gate_frame: np.ndarray) -> list:
         """Processes choke-point gate camera for identity verification, PPE evaluation, and access logging."""
@@ -320,41 +382,22 @@ class MultiCameraOrchestrator:
                 gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}", frame_ppe_items=ppe_items, face_bbox=matched_face
             )
 
-            # Inanimate Object Rejection:
-            # Eliminates hanging black backpacks on coat hooks, dark coats, chairs, curtains, etc.
-            # A genuine human worker in the gate choke-point MUST exhibit at least one confirmation:
-            # 1. Matched human face from YuNet detector
-            # 2. Verified safety gear (Helmet PASS or Vest PASS)
-            # 3. Measurable human skin tone in head/neck or body region (>= 4.5% skin)
-            # 4. High-confidence person detection (conf >= 0.52)
-            if matched_face is None and ppe_res["helmet"] != "PASS" and ppe_res["vest"] != "PASS" and conf < 0.52:
-                # Check skin in head/neck region
-                check_h = max(25, int(head_h * 1.25))
-                head_check_crop = gate_frame[y1:min(gh, y1 + check_h), x1:x2]
-                if head_check_crop.size > 0:
-                    ch_ycrcb = cv2.cvtColor(head_check_crop, cv2.COLOR_BGR2YCrCb)
-                    ch_hsv = cv2.cvtColor(head_check_crop, cv2.COLOR_BGR2HSV)
-                    m_ycrcb = cv2.inRange(ch_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
-                    m_hsv = cv2.inRange(ch_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
-                    skin_ratio = cv2.countNonZero(cv2.bitwise_and(m_ycrcb, m_hsv)) / max(1, head_check_crop.shape[0] * head_check_crop.shape[1])
-                else:
-                    skin_ratio = 0.0
+            # Multi-Layered Inanimate Object Rejection:
+            # Eliminates hanging clothes, uniforms on hangers, backpacks, and background noise
+            is_human = self._is_valid_human_detection(
+                gate_frame, (x1, y1, x2, y2), conf, matched_face, ppe_res, tid, "gate"
+            )
+            if not is_human:
+                continue
 
-                # Check skin across the entire candidate box (arms/hands/legs)
-                full_body_crop = gate_frame[y1:y2, x1:x2]
-                if full_body_crop.size > 0:
-                    fb_ycrcb = cv2.cvtColor(full_body_crop, cv2.COLOR_BGR2YCrCb)
-                    fb_hsv = cv2.cvtColor(full_body_crop, cv2.COLOR_BGR2HSV)
-                    fb_m1 = cv2.inRange(fb_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
-                    fb_m2 = cv2.inRange(fb_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
-                    body_skin_ratio = cv2.countNonZero(cv2.bitwise_and(fb_m1, fb_m2)) / max(1, full_body_crop.shape[0] * full_body_crop.shape[1])
-                else:
-                    body_skin_ratio = 0.0
-
-                # If no face, no helmet, no vest, and no human skin:
-                # This is an inanimate object (e.g. hanging backpack, jacket on hook, chair) -> completely drop!
-                if skin_ratio < 0.045 and body_skin_ratio < 0.035:
-                    continue
+            # Multi-Frame Temporal Confirmation:
+            # Requires at least 3 consecutive valid detections before broadcasting candidate as a confirmed worker
+            # (Immediate 1-frame confirmation if human face is matched or confidence >= 0.70 or safety gear confirmed)
+            track_key = f"gate_{tid}"
+            self.track_confirmations[track_key] = self.track_confirmations.get(track_key, 0) + 1
+            min_frames_needed = 1 if (conf >= 0.70 or matched_face is not None or ppe_res["helmet"] == "PASS") else 3
+            if self.track_confirmations[track_key] < min_frames_needed:
+                continue
 
             is_compliant = ppe_res["is_compliant"]
             helmet = ppe_res["helmet"]
@@ -497,6 +540,20 @@ class MultiCameraOrchestrator:
             ppe_res = self.ward_ppe_evaluator.evaluate_ppe(
                 ward_frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items, face_bbox=matched_ward_face
             )
+
+            # Multi-Layered Inanimate Object Rejection:
+            is_human = self._is_valid_human_detection(
+                ward_frame, (x1, y1, x2, y2), conf, matched_ward_face, ppe_res, track_id, "ward"
+            )
+            if not is_human:
+                continue
+
+            # Multi-Frame Temporal Confirmation:
+            track_key = f"ward_{track_id}"
+            self.track_confirmations[track_key] = self.track_confirmations.get(track_key, 0) + 1
+            min_frames_needed = 1 if (conf >= 0.70 or matched_ward_face is not None or ppe_res["helmet"] == "PASS") else 3
+            if self.track_confirmations[track_key] < min_frames_needed:
+                continue
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
             gloves = ppe_res.get("gloves", "UNKNOWN")
