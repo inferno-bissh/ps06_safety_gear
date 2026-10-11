@@ -884,6 +884,37 @@
 - **Files Modified:**
   - Modified: [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-11 (Session 48)
+- **Agent Focus:** Webcam Hair-as-Helmet False Positive Elimination (CCTV 1) & Dual-Camera PPE Stream Refinement (CCTV 2).
+- **Key Decisions & Accomplishments:**
+  - **Root Cause Analysis (CCTV 1 Hair False Positive):**
+    - Diagnosed that in [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), the worker bounding box extended headroom `y1 = max(0, fy - int(fh * 0.85))` far above the worker's head into the ceiling/wall.
+    - In [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), `_check_helmet_hsv` sampled the top 48% of the head crop—directly capturing the empty room wall and ceiling behind the user rather than the actual skull dome.
+    - The previous color threshold accepted any color with $\ge 15\%$ coverage and `lap_var < 360`, allowing cool/bluish wall shadows and monitor glare (`S = 75, V = 65`) to evaluate as `BLUE` helmet `PASS`.
+    - Furthermore, Neural YOLO detections at low confidence (`conf >= 0.32`) were overriding HSV hair determinations, forcing false `PASS` on bare dark hair.
+  - **Overhauled Skull Crown ROI & Face Anchoring:**
+    - Updated `evaluate_ppe` to accept optional `face_bbox: Optional[Tuple[int, int, int, int]] = None`.
+    - When `face_bbox` (`fx, fy, fw, fh`) is present, `evaluate_ppe` pins the skull crown ROI tightly to the worker's head: `sx1 = fx + 0.10*fw`, `sx2 = fx + 0.90*fw`, `sy1 = fy - 0.65*fh`, `sy2 = fy + 0.05*fh`. This eliminates all background wall bleed on either side of the head.
+    - Updated `process_gate_stream` (CCTV 1) and `process_ward_stream` (CCTV 2) to pass detected face anchors directly to `evaluate_ppe`.
+  - **Implemented Robust Hair vs. Helmet Discriminator:**
+    - In `_check_helmet_hsv`:
+      - **Bare Hair Detection:** Human hair follicles and dark tones (`V < 92`, `S < 110`, or dark brown `H: 5-25, S: 40-150, V: 30-110`) are segmented. If hair covers $\ge 25\%$ of the skull crown, it is decisively classified as `BARE_HAIR`.
+      - **Authentic Hardhat Color Shells:** Yellow, Orange, Blue, Red, Green, and White now require at least $28\%-35\%$ solid plastic coverage, strictly exceeding the hair ratio, and plastic micro-smoothness (`lap_var < 340`).
+      - Blue hardhat mask was tightened to $S \ge 130$ and $V \ge 95$, completely rejecting cool grey walls and monitor glare.
+    - In `evaluate_ppe`:
+      - Added safety guard preventing Neural YOLO from overriding `BARE_HAIR`, `HAIR_TEXTURE`, or `BARE_SKIN` to a `PASS` unless neural confidence exceeds $0.75$.
+      - Raised `HELMET_CONF_THRESHOLD` in `config.py` from 0.32 to 0.42 to suppress weak neural false alarms.
+  - **CCTV 2 Stream Refinement:**
+    - Upgraded `process_ward_stream` in [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py) to run YuNet face matching across ward worker boxes. When workers turn toward CCTV 2, their exact face anchor is passed to `evaluate_ppe`, giving CCTV 2 the same high-precision skull crown ROI.
+    - Replaced deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)`.
+  - **Verification:**
+    - Validated user sample image ([`bisssh/face_01.jpg`](file:///c:/Users/dehur/ps_06/vision_pipeline/known_workers/bisssh/face_01.jpg)): `hair_ratio = 0.72` -> evaluated to `FAIL NONE BARE_HAIR` (100% correct).
+    - Validated live CCTV 1 polling via `/api/workers`: returned `CCTV_01: Helmet=FAIL` for bare hair (100% resolved).
+    - Verified synthetic test matrix on Yellow, Blue, and White hardhats: all evaluated correctly to `PASS`.
+    - Verified Next.js dashboard (`http://localhost:3000` -> 200 OK) and TypeScript check (`npx tsc --noEmit` -> 0 errors).
+- **Files Modified:**
+  - Modified: [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
@@ -898,4 +929,5 @@
    - Run `python vision_pipeline/val_yolo.py --weights runs/detect/ps6_ppe_train/weights/best.pt --data vision_pipeline/dataset/ppe_dataset.yaml`
 4. **Operations Console Dashboard:**
    - Access [http://localhost:3000](http://localhost:3000) or [http://192.168.1.25:3000](http://192.168.1.25:3000) on LAN.
+
 

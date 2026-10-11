@@ -78,6 +78,7 @@ class WorkerPPEEvaluator:
         bbox: Tuple[int, int, int, int],
         track_id: str,
         frame_ppe_items: Optional[List[dict]] = None,
+        face_bbox: Optional[Tuple[int, int, int, int]] = None,
     ) -> dict:
         """
         Evaluates PPE compliance for a single detected worker bounding box (x1, y1, x2, y2).
@@ -193,7 +194,7 @@ class WorkerPPEEvaluator:
         worker_h_pct = box_h / max(1, h)
         worker_bottom_pct = y2 / max(1, h)
 
-        # 2. Adaptive Posture Crops for HSV Color Classification
+        # 2. Adaptive Posture Crops & Precise Skull Crown ROI
         if aspect_ratio < 1.6:
             head_h_ratio = 0.35
             torso_y1_ratio = 0.30
@@ -203,8 +204,23 @@ class WorkerPPEEvaluator:
             torso_y1_ratio = 0.22
             torso_y2_ratio = 0.68
 
-        head_y2 = y1 + int(box_h * head_h_ratio)
-        head_crop = frame[y1:head_y2, x1:x2]
+        # Target skull crown ROI: use face_bbox anchor if available (eliminating wall background bleed)
+        if face_bbox is not None:
+            fx, fy, fw, fh = face_bbox
+            sx1 = max(0, fx + int(fw * 0.10))
+            sx2 = min(w, fx + fw - int(fw * 0.10))
+            sy1 = max(0, fy - int(fh * 0.65))
+            sy2 = min(h, fy + int(fh * 0.05))
+            head_crop = frame[sy1:sy2, sx1:sx2]
+            crown_roi = (sx1, sy1, sx2, sy2)
+        else:
+            head_h = max(20, int(box_h * head_h_ratio))
+            sx1 = max(0, x1 + int(box_w * 0.20))
+            sx2 = min(w, x2 - int(box_w * 0.20))
+            sy1 = y1
+            sy2 = min(h, y1 + int(head_h * 0.55))
+            head_crop = frame[sy1:sy2, sx1:sx2]
+            crown_roi = (sx1, sy1, sx2, sy2)
 
         torso_y1 = y1 + int(box_h * torso_y1_ratio)
         torso_y2 = y1 + int(box_h * torso_y2_ratio)
@@ -218,25 +234,35 @@ class WorkerPPEEvaluator:
 
         # Run Secondary HSV Inspection for Helmet and Vest
         helmet_hsv_pass, helmet_hsv_color, white_pct, colored_pct, crown_roi = self._check_helmet_hsv(
-            head_crop, (x1, y1, x2, head_y2)
+            head_crop, crown_roi
         )
         vest_hsv_pass, vest_hsv_color, vest_pct = self._check_vest_hsv(torso_crop)
 
         # 3. Hybrid Fusion: Neural YOLO + Color/Dome Shell Classification
         # HELMET EVALUATION:
-        # Passes if hardhat shell/color confirms helmet OR Neural YOLO detects helmet!
+        # Passes if hardhat shell/color confirms helmet OR Neural YOLO detects helmet (with bare hair protection)!
         if helmet_hsv_pass:
             helmet_pass = True
             helmet_source = "HELMET_SHELL"
             helmet_color = helmet_hsv_color
-        elif helmet_neural and helmet_neural_conf >= HELMET_CONF_THRESHOLD and helmet_hsv_color != "PAPER_BAG":
+        elif (
+            helmet_neural
+            and helmet_neural_conf >= HELMET_CONF_THRESHOLD
+            and helmet_hsv_color not in ["PAPER_BAG", "BARE_HAIR", "HAIR_TEXTURE", "BARE_SKIN"]
+        ):
+            # Neural YOLO confirms helmet only when bare hair or scalp is NOT detected on skull
             helmet_pass = True
             helmet_source = "NEURAL_YOLO"
-            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE", "BARE_SKIN", "BARE_HAIR", "HAIR_TEXTURE"] else "VERIFIED"
+            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
+        elif helmet_neural and helmet_neural_conf >= 0.75 and helmet_hsv_color != "PAPER_BAG":
+            # Extremely high neural confidence exception (>75%)
+            helmet_pass = True
+            helmet_source = "NEURAL_YOLO"
+            helmet_color = "VERIFIED"
         else:
             helmet_pass = False
             helmet_source = "NONE"
-            helmet_color = "NONE"
+            helmet_color = helmet_hsv_color if helmet_hsv_color in ["BARE_HAIR", "HAIR_TEXTURE", "BARE_SKIN"] else "NONE"
 
         # VEST EVALUATION:
         # Directly passes if Neural YOLO detected Vest OR HSV confirmed high-vis vest!
@@ -456,60 +482,51 @@ class WorkerPPEEvaluator:
     ) -> Tuple[bool, str, float, float, Tuple[int, int, int, int]]:
         """
         Evaluates the central skull crown region to detect:
-        1. White hardhats (neutral/off-white dome, V >= 105, S <= 60)
-        2. Colored hardhats (Yellow, Orange, Blue, Red, Green)
+        1. Authentic Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
+        2. Discriminates bare hair (dark follicles, natural texture) from hardhat plastic shells.
         Eliminates background wall interference by confining analysis strictly to the 
-        central skull dome (blocking the wall with the person's head).
+        central skull dome.
         """
         if head_crop.size == 0:
             return False, "NONE", 0.0, 0.0, (0, 0, 0, 0)
 
         gx1, gy1, gx2, gy2 = global_head_coords
-        head_h, head_w = head_crop.shape[:2]
+        crown_crop = head_crop
+        crown_roi_global = (gx1, gy1, gx2, gy2)
 
-        # Central Crown ROI centered on skull axis:
-        center_x = head_w // 2
-        half_w = max(18, int(head_w * 0.35))
-        crop_w_start = max(0, center_x - half_w)
-        crop_w_end = min(head_w, center_x + half_w)
-        crop_h_start = 0
-        crop_h_end = max(18, int(head_h * 0.48))
-
-        crown_roi_global = (
-            gx1 + crop_w_start,
-            gy1 + crop_h_start,
-            gx1 + crop_w_end,
-            gy1 + crop_h_end,
-        )
-
-        crown_crop = head_crop[crop_h_start:crop_h_end, crop_w_start:crop_w_end]
-        if crown_crop.size == 0:
-            return False, "NONE", 0.0, 0.0, crown_roi_global
-
-        crown_hsv = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2HSV)
         crown_pixels = crown_crop.shape[0] * crown_crop.shape[1]
         if crown_pixels == 0:
             return False, "NONE", 0.0, 0.0, crown_roi_global
 
-        mean_h = float(np.mean(crown_hsv[:, :, 0]))
-        mean_s = float(np.mean(crown_hsv[:, :, 1]))
-        mean_v = float(np.mean(crown_hsv[:, :, 2]))
-
-        # Crown micro-texture variance
+        crown_hsv = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2HSV)
+        crown_ycrcb = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2YCrCb)
         crown_gray = cv2.cvtColor(crown_crop, cv2.COLOR_BGR2GRAY)
-        lap_var = cv2.Laplacian(crown_gray, cv2.CV_64F).var()
+        lap_var = float(cv2.Laplacian(crown_gray, cv2.CV_64F).var())
 
-        # 1. Authentic High-Vis Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
-        # Evaluated first so real helmets are never blocked by background shadows or forehead skin!
-        mask_yellow = cv2.inRange(crown_hsv, np.array([16, 95, 110]), np.array([36, 255, 255]))
-        mask_orange = cv2.inRange(crown_hsv, np.array([6, 125, 110]), np.array([20, 255, 255]))
-        mask_blue = cv2.inRange(crown_hsv, np.array([90, 75, 65]), np.array([132, 255, 255]))
+        # 1. Hair Segmentation in Skull Zone:
+        # Human hair is dark (V < 92) and low-to-moderate saturation, or dark brown
+        m_hair1 = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 110, 92]))
+        m_hair2 = cv2.inRange(crown_hsv, np.array([5, 40, 30]), np.array([25, 140, 110]))
+        m_hair = cv2.bitwise_or(m_hair1, m_hair2)
+        hair_ratio = cv2.countNonZero(m_hair) / crown_pixels
+
+        # 2. Forehead Skin Segmentation:
+        m_skin_ycrcb = cv2.inRange(crown_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+        m_skin_hsv = cv2.inRange(crown_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
+        m_skin = cv2.bitwise_and(m_skin_ycrcb, m_skin_hsv)
+        skin_ratio = cv2.countNonZero(m_skin) / crown_pixels
+
+        # 3. Authentic High-Vis Industrial Hardhat Colors (Yellow, Orange, Blue, Red, Green, White)
+        # Note: Blue requires S >= 130 and V >= 95 so cool white/grey room walls and monitor glow never pass!
+        mask_yellow = cv2.inRange(crown_hsv, np.array([20, 105, 115]), np.array([38, 255, 255]))
+        mask_orange = cv2.inRange(crown_hsv, np.array([8, 140, 125]), np.array([22, 255, 255]))
+        mask_blue = cv2.inRange(crown_hsv, np.array([98, 130, 95]), np.array([128, 255, 255]))
         mask_red = cv2.bitwise_or(
-            cv2.inRange(crown_hsv, np.array([0, 125, 80]), np.array([8, 255, 255])),
-            cv2.inRange(crown_hsv, np.array([168, 115, 80]), np.array([180, 255, 255]))
+            cv2.inRange(crown_hsv, np.array([0, 140, 95]), np.array([8, 255, 255])),
+            cv2.inRange(crown_hsv, np.array([170, 140, 95]), np.array([180, 255, 255]))
         )
-        mask_green = cv2.inRange(crown_hsv, np.array([38, 75, 70]), np.array([86, 255, 255]))
-        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 160]), np.array([180, 40, 255]))
+        mask_green = cv2.inRange(crown_hsv, np.array([42, 105, 95]), np.array([85, 255, 255]))
+        mask_white = cv2.inRange(crown_hsv, np.array([0, 0, 155]), np.array([180, 45, 255]))
 
         color_counts = {
             "YELLOW": cv2.countNonZero(mask_yellow),
@@ -529,31 +546,36 @@ class WorkerPPEEvaluator:
         best_color, max_pixels = max(color_counts.items(), key=lambda item: item[1])
         best_ratio = max_pixels / crown_pixels
 
-        # Authentic high-vis hardhat color detection on crown dome:
-        if best_color != "WHITE" and best_ratio >= 0.15 and lap_var < 360:
-            return True, best_color, white_ratio, colored_ratio, crown_roi_global
-        elif best_color == "WHITE" and white_ratio >= 0.25 and lap_var < 240:
-            return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
-
-        # 2. Kraft Paper Bag Rejection (Brown carry bags must never be accepted):
+        # 4. Kraft Paper Bag Rejection:
         mask_kraft = cv2.inRange(crown_hsv, np.array([10, 60, 90]), np.array([20, 160, 210]))
         kraft_ratio = cv2.countNonZero(mask_kraft) / crown_pixels
+        mean_h = float(np.mean(crown_hsv[:, :, 0]))
+        mean_s = float(np.mean(crown_hsv[:, :, 1]))
+        mean_v = float(np.mean(crown_hsv[:, :, 2]))
         if kraft_ratio >= 0.32 or ((12 <= mean_h <= 20) and (75 <= mean_s <= 160) and (95 <= mean_v <= 210)):
             return False, "PAPER_BAG", white_ratio, colored_ratio, crown_roi_global
 
-        # 2. If NO authentic hardhat color was matched, check for exposed bare skin or bare hair:
-        mask_skin = cv2.inRange(crown_hsv, np.array([0, 25, 40]), np.array([28, 180, 255]))
-        skin_ratio = cv2.countNonZero(mask_skin) / max(1, crown_pixels)
-        if skin_ratio >= 0.25:
-            return False, "BARE_SKIN", white_ratio, colored_ratio, crown_roi_global
+        # 5. Authentic Colored Hardhat (Yellow, Orange, Blue, Red, Green):
+        # Requires at least 28% coverage of skull dome, strictly exceeding hair ratio, and plastic smoothness
+        if best_color != "WHITE" and best_ratio >= 0.28 and best_ratio > hair_ratio and lap_var < 340:
+            return True, best_color, white_ratio, colored_ratio, crown_roi_global
 
-        mask_hair = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 85, 80]))
-        hair_ratio = cv2.countNonZero(mask_hair) / max(1, crown_pixels)
-        if hair_ratio >= 0.35 or (lap_var >= 240 and hair_ratio >= 0.20):
+        # 6. Authentic White Hardhat:
+        # Requires at least 35% solid white plastic coverage, low hair (<20%), and smooth finish (lap_var < 200)
+        if best_color == "WHITE" and white_ratio >= 0.35 and hair_ratio < 0.20 and white_ratio > hair_ratio and lap_var < 200:
+            return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
+
+        # 7. Explicit Bare Hair Rejection:
+        # If dark/brown hair covers 25%+ of skull dome, it is unequivocally bare hair!
+        if hair_ratio >= 0.25:
             return False, "BARE_HAIR", white_ratio, colored_ratio, crown_roi_global
 
-        # 3. Natural hair fiber texture variance:
-        if lap_var >= 260:
+        # 8. Explicit Bare Forehead/Skin Rejection:
+        if skin_ratio >= 0.28:
+            return False, "BARE_SKIN", white_ratio, colored_ratio, crown_roi_global
+
+        # 9. Natural Hair Fiber Texture Rejection:
+        if lap_var >= 260 and hair_ratio >= 0.15:
             return False, "HAIR_TEXTURE", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global

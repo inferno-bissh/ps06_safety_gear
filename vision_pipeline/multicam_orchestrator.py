@@ -287,7 +287,7 @@ class MultiCameraOrchestrator:
 
             # Evaluate PPE for every candidate box on Gate Camera with neural + HSV fusion!
             ppe_res = self.gate_ppe_evaluator.evaluate_ppe(
-                gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}", frame_ppe_items=ppe_items
+                gate_frame, (x1, y1, x2, y2), f"GATE_{worker_id}", frame_ppe_items=ppe_items, face_bbox=matched_face
             )
 
             # Inanimate Object Rejection:
@@ -439,15 +439,32 @@ class MultiCameraOrchestrator:
             else:
                 track_ids = [i + 1 for i in range(len(boxes))]
 
+        # Optional face detection on ward frame for workers facing camera
+        ward_faces = None
+        if self.face_engine.use_native_sface and self.face_engine.detector:
+            try:
+                self.face_engine.detector.setInputSize((ww, wh))
+                _, ward_faces = self.face_engine.detector.detect(ward_frame)
+            except Exception:
+                ward_faces = None
+
         ward_workers = []
 
         for box, track_id, conf in zip(boxes, track_ids, confidences):
             x1, y1, x2, y2 = map(int, box)
             str_tid = f"TRACK_{track_id:02d}"
 
+            matched_ward_face = None
+            if ward_faces is not None:
+                for f in ward_faces:
+                    fx, fy, fw, fh = map(int, f[:4])
+                    if x1 - 30 <= (fx + fw // 2) <= x2 + 30 and y1 - 30 <= (fy + fh // 2) <= y2 + 30:
+                        matched_ward_face = (fx, fy, fw, fh)
+                        break
+
             # Evaluate PPE compliance with neural + HSV fusion!
             ppe_res = self.ward_ppe_evaluator.evaluate_ppe(
-                ward_frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items
+                ward_frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items, face_bbox=matched_ward_face
             )
             helmet = ppe_res["helmet"]
             vest = ppe_res["vest"]
@@ -549,7 +566,7 @@ class MultiCameraOrchestrator:
                 matched_worker, match_method = self._resolve_worker_identity(person_crop)
 
                 # Push Incident to Cloud Firestore
-                now_iso = datetime.utcnow().isoformat() + "Z"
+                now_iso = datetime.now(timezone.utc).isoformat()
                 missing_items = [item for item, st in [("HELMET", helmet), ("VEST", vest), ("GLOVES", gloves)] if st == "FAIL"]
                 if not missing_items and (vest == "UNKNOWN" or gloves == "UNKNOWN"):
                     missing_items = ["BODY_OR_HANDS_NOT_IN_FRAME"]
