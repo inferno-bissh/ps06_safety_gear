@@ -59,9 +59,24 @@ def _get_default_standby_frame(channel: str) -> bytes:
     img = np.zeros((360, 640, 3), dtype=np.uint8)
     img[:] = (20, 26, 36)
     cv2.rectangle(img, (20, 20), (620, 340), (45, 55, 72), 2)
-    label = f"[{channel.upper()}] INITIALIZING VIDEO FEED..."
-    cv2.putText(img, label, (40, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 220, 255), 2)
-    cv2.putText(img, "Connecting to camera hardware stream...", (40, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 180, 200), 1)
+    ch_upper = channel.upper()
+    if channel == "cctv3":
+        label = "[CCTV 3 - PHONE 2] AWAITING STREAM"
+        sub = "Camera disconnected / standby. Configure IP in settings."
+    elif channel == "cctv4":
+        label = "[CCTV 4 - PHONE 3] AWAITING STREAM"
+        sub = "Camera disconnected / standby. Configure IP in settings."
+    elif channel == "cctv2":
+        label = "[CCTV 2 - PHONE 1] AWAITING STREAM"
+        sub = "Camera disconnected / standby. Configure IP in settings."
+    elif channel == "cctv1":
+        label = "[CCTV 1 - WEBCAM] HARDWARE STANDBY"
+        sub = "DirectShow webcam initializing..."
+    else:
+        label = f"[{ch_upper}] STANDBY FEED"
+        sub = "Awaiting camera hardware connection..."
+    cv2.putText(img, label, (40, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 200, 255), 2)
+    cv2.putText(img, sub, (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (160, 180, 200), 1)
     ret, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
     data = jpeg.tobytes() if ret else b""
     _STANDBY_CACHE[channel] = data
@@ -104,9 +119,18 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
 
         # 3. Single Frame Snapshots (JPEG)
         elif "snapshot" in path:
-            cam = "cctv1" if "cctv1" in path else ("cctv2" if "cctv2" in path else "composite")
+            if "cctv1" in path:
+                cam = "cctv1"
+            elif "cctv2" in path:
+                cam = "cctv2"
+            elif "cctv3" in path:
+                cam = "cctv3"
+            elif "cctv4" in path:
+                cam = "cctv4"
+            else:
+                cam = "composite"
             with _FRAME_LOCK:
-                frame_bytes = _ACTIVE_FRAMES.get(cam) or _ACTIVE_FRAMES.get("cctv1") or _ACTIVE_FRAMES.get("composite")
+                frame_bytes = _ACTIVE_FRAMES.get(cam)
             if not frame_bytes:
                 frame_bytes = _get_default_standby_frame(cam)
             self.send_response(200)
@@ -188,7 +212,10 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 with _FRAME_LOCK:
-                    frame_bytes = _ACTIVE_FRAMES.get(channel) or _ACTIVE_FRAMES.get("composite")
+                    if channel == "composite":
+                        frame_bytes = _ACTIVE_FRAMES.get("composite") or _ACTIVE_FRAMES.get("cctv1")
+                    else:
+                        frame_bytes = _ACTIVE_FRAMES.get(channel)
 
                 if frame_bytes is None:
                     frame_bytes = _get_default_standby_frame(channel)
@@ -368,6 +395,11 @@ class WebStreamBroadcaster:
         if ret:
             with _FRAME_LOCK:
                 _ACTIVE_FRAMES[channel] = buffer.tobytes()
+
+    def clear_frame(self, channel: str):
+        """Removes the active JPEG frame for a specific camera channel so it falls back to its standby frame."""
+        with _FRAME_LOCK:
+            _ACTIVE_FRAMES.pop(channel, None)
 
     def update_workers(self, workers_data: list):
         """Updates active tracked worker metadata for dashboard live polling."""

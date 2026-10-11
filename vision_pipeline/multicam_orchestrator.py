@@ -96,13 +96,16 @@ class MultiCameraOrchestrator:
             ward_src = saved_cfg["cctv2"]
         if gate_src == "0" and "cctv1" in saved_cfg and saved_cfg["cctv1"] != "0":
             gate_src = saved_cfg["cctv1"]
+        if (cctv3_src is None or cctv3_src == "0") and "cctv3" in saved_cfg and saved_cfg["cctv3"]:
+            cctv3_src = saved_cfg["cctv3"]
+        if (cctv4_src is None or cctv4_src == "0") and "cctv4" in saved_cfg and saved_cfg["cctv4"]:
+            cctv4_src = saved_cfg["cctv4"]
 
         gate_src = normalize_camera_source(gate_src, "0")
         ward_src = normalize_camera_source(ward_src, "http://192.168.1.5:8080/video")
-        if cctv3_src:
-            cctv3_src = normalize_camera_source(cctv3_src, None)
-        if cctv4_src:
-            cctv4_src = normalize_camera_source(cctv4_src, None)
+        # Ensure CCTV 3 and CCTV 4 never default to laptop webcam 0
+        cctv3_src = None if cctv3_src in (None, "", "0", 0, "STANDBY") else normalize_camera_source(cctv3_src, None)
+        cctv4_src = None if cctv4_src in (None, "", "0", 0, "STANDBY") else normalize_camera_source(cctv4_src, None)
 
         print("=" * 70)
         print("  SAFETYINTEL ENTERPRISE MULTI-CCTV ORCHESTRATOR")
@@ -143,8 +146,8 @@ class MultiCameraOrchestrator:
         print("[Stream Manager] Initializing decoupled camera threads...")
         self.gate_stream = ThreadedCameraStream(src=gate_src, camera_id="CAM_00_GATE", target_fps=20)
         self.ward_stream = ThreadedCameraStream(src=ward_src, camera_id="CAM_01_WARD", target_fps=25)
-        self.cctv3_stream = ThreadedCameraStream(src=cctv3_src, camera_id="CAM_03_SIDE_L", target_fps=20) if cctv3_src else None
-        self.cctv4_stream = ThreadedCameraStream(src=cctv4_src, camera_id="CAM_04_SIDE_R", target_fps=20) if cctv4_src else None
+        self.cctv3_stream = ThreadedCameraStream(src=cctv3_src, camera_id="CAM_02_PHONE2", target_fps=20) if cctv3_src else None
+        self.cctv4_stream = ThreadedCameraStream(src=cctv4_src, camera_id="CAM_03_PHONE3", target_fps=20) if cctv4_src else None
 
         # 6. Stateful Memory & Session Tables
         self.active_checked_in_workers: Dict[str, dict] = {}
@@ -196,7 +199,7 @@ class MultiCameraOrchestrator:
             return False, f"Unknown camera channel: {channel}"
 
         norm = normalize_camera_source(source, "0" if ch in ("cctv1", "gate") else "http://192.168.1.5:8080/video")
-        if ch in ("cctv2", "ward", "cam_01"):
+        if ch in ("cctv2", "ward", "cam_01", "phone1"):
             self.ward_stream.update_source(norm)
             ip_str = str(norm).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
             port_val = 8080
@@ -212,7 +215,69 @@ class MultiCameraOrchestrator:
                 "cctv2_endpoint": "/video",
                 "cctv2_status": "ONLINE",
             })
-            return True, f"CCTV 2 phone stream dynamically switched to '{norm}'"
+            return True, f"CCTV 2 (Phone 1) stream dynamically switched to '{norm}'"
+        elif ch in ("cctv3", "left", "cam_02", "phone2"):
+            if action == "disconnect":
+                if self.cctv3_stream:
+                    self.cctv3_stream.disconnect()
+                self.web_broadcaster.clear_frame("cctv3")
+                save_camera_config({"cctv3_status": "DISCONNECTED"})
+                return True, "CCTV 3 (Phone 2) stream disconnected to standby mode"
+
+            norm3 = normalize_camera_source(source, None)
+            if not norm3 or norm3 in (0, "0"):
+                return False, "CCTV 3 requires an IP camera URL (e.g. http://<ip>:8080/video)"
+            if self.cctv3_stream:
+                self.cctv3_stream.update_source(norm3)
+            else:
+                self.cctv3_stream = ThreadedCameraStream(src=norm3, camera_id="CAM_02_PHONE2", target_fps=20)
+
+            ip_str3 = str(norm3).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+            port_val3 = 8080
+            if ":" in str(norm3).replace("http://", "").replace("https://", "").split("/")[0]:
+                try:
+                    port_val3 = int(str(norm3).replace("http://", "").replace("https://", "").split("/")[0].split(":")[1])
+                except Exception:
+                    pass
+            save_camera_config({
+                "cctv3": str(norm3),
+                "cctv3_ip": ip_str3,
+                "cctv3_port": port_val3,
+                "cctv3_endpoint": "/video",
+                "cctv3_status": "ONLINE",
+            })
+            return True, f"CCTV 3 (Phone 2) stream dynamically switched to '{norm3}'"
+        elif ch in ("cctv4", "right", "cam_03", "phone3"):
+            if action == "disconnect":
+                if self.cctv4_stream:
+                    self.cctv4_stream.disconnect()
+                self.web_broadcaster.clear_frame("cctv4")
+                save_camera_config({"cctv4_status": "DISCONNECTED"})
+                return True, "CCTV 4 (Phone 3) stream disconnected to standby mode"
+
+            norm4 = normalize_camera_source(source, None)
+            if not norm4 or norm4 in (0, "0"):
+                return False, "CCTV 4 requires an IP camera URL (e.g. http://<ip>:8080/video)"
+            if self.cctv4_stream:
+                self.cctv4_stream.update_source(norm4)
+            else:
+                self.cctv4_stream = ThreadedCameraStream(src=norm4, camera_id="CAM_03_PHONE3", target_fps=20)
+
+            ip_str4 = str(norm4).replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+            port_val4 = 8080
+            if ":" in str(norm4).replace("http://", "").replace("https://", "").split("/")[0]:
+                try:
+                    port_val4 = int(str(norm4).replace("http://", "").replace("https://", "").split("/")[0].split(":")[1])
+                except Exception:
+                    pass
+            save_camera_config({
+                "cctv4": str(norm4),
+                "cctv4_ip": ip_str4,
+                "cctv4_port": port_val4,
+                "cctv4_endpoint": "/video",
+                "cctv4_status": "ONLINE",
+            })
+            return True, f"CCTV 4 (Phone 3) stream dynamically switched to '{norm4}'"
         elif ch in ("cctv1", "gate", "cam_00"):
             self.gate_stream.update_source(norm)
             save_camera_config({"cctv1": str(norm), "cctv1_status": "ONLINE"})
@@ -223,10 +288,24 @@ class MultiCameraOrchestrator:
     def get_cameras_status(self) -> dict:
         """Returns live stream connectivity status across all camera channels."""
         return {
-            "cctv1": self.gate_stream.get_status(),
-            "cctv2": self.ward_stream.get_status(),
-            "cctv3": self.cctv3_stream.get_status() if self.cctv3_stream else None,
-            "cctv4": self.cctv4_stream.get_status() if self.cctv4_stream else None,
+            "cctv1": self.gate_stream.get_status() if self.gate_stream else None,
+            "cctv2": self.ward_stream.get_status() if self.ward_stream else None,
+            "cctv3": self.cctv3_stream.get_status() if self.cctv3_stream else {
+                "camera_id": "CAM_02_PHONE2",
+                "source": "STANDBY",
+                "is_connected": False,
+                "is_synthetic": True,
+                "frame_count": 0,
+                "latency_sec": 0.0,
+            },
+            "cctv4": self.cctv4_stream.get_status() if self.cctv4_stream else {
+                "camera_id": "CAM_03_PHONE3",
+                "source": "STANDBY",
+                "is_connected": False,
+                "is_synthetic": True,
+                "frame_count": 0,
+                "latency_sec": 0.0,
+            },
             "saved_config": load_camera_config(),
         }
 
@@ -941,14 +1020,19 @@ class MultiCameraOrchestrator:
                     self.web_broadcaster.update_frame("cctv1", gate_resized)
                     self.web_broadcaster.update_frame("cctv2", ward_resized)
                     self.web_broadcaster.update_frame("composite", display_view)
-                    if self.cctv3_stream:
+                    if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
                         f3, _ = self.cctv3_stream.get_latest_frame()
                         if f3 is not None:
                             self.web_broadcaster.update_frame("cctv3", f3)
-                    if self.cctv4_stream:
+                    else:
+                        self.web_broadcaster.clear_frame("cctv3")
+
+                    if self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode:
                         f4, _ = self.cctv4_stream.get_latest_frame()
                         if f4 is not None:
                             self.web_broadcaster.update_frame("cctv4", f4)
+                    else:
+                        self.web_broadcaster.clear_frame("cctv4")
 
                 # In test mode, exit after 40 frames without GUI rendering
                 if self.test_mode:

@@ -65,8 +65,8 @@ export async function POST(req: NextRequest) {
 
     let cctv1 = body.cctv1 || savedConfig.cctv1 || "0";
     let cctv2 = body.cctv2 || savedConfig.cctv2 || "http://192.168.1.5:8080/video";
-    const cctv3 = body.cctv3;
-    const cctv4 = body.cctv4;
+    const cctv3 = body.cctv3 || savedConfig.cctv3 || "";
+    const cctv4 = body.cctv4 || savedConfig.cctv4 || "";
 
     // Sanitize against broadcast URLs containing :5000
     if (String(cctv1).includes(":5000")) cctv1 = savedConfig.cctv1 || "0";
@@ -99,11 +99,13 @@ export async function POST(req: NextRequest) {
     if (alreadyActive && !body.forceRestart) {
       // Forward dynamic stream update to live Python orchestrator on port 5000
       let dynamicSwitched = false;
+      const targetChannel = (body.channel || "cctv2").toLowerCase();
+      const targetSource = body.source || (targetChannel === "cctv3" ? cctv3 : targetChannel === "cctv4" ? cctv4 : cctv2);
       try {
         const resSource = await fetch("http://localhost:5000/api/cameras/source", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel: "cctv2", source: cctv2, action: "connect" }),
+          body: JSON.stringify({ channel: targetChannel, source: targetSource, action: body.action || "connect" }),
           signal: AbortSignal.timeout(1500),
         });
         dynamicSwitched = resSource.ok;
@@ -115,12 +117,14 @@ export async function POST(req: NextRequest) {
         isOnline: true,
         dynamicSwitched,
         message: dynamicSwitched
-          ? `Python Vision Orchestrator updated dynamically to: ${cctv2}`
+          ? `Python Vision Orchestrator updated dynamically for ${targetChannel.toUpperCase()}: ${targetSource}`
           : "Python Vision Orchestrator is active on port 5000",
         port: 5000,
         urls: {
           cctv1: "http://localhost:5000/video/cctv1",
           cctv2: "http://localhost:5000/video/cctv2",
+          cctv3: "http://localhost:5000/video/cctv3",
+          cctv4: "http://localhost:5000/video/cctv4",
         },
       });
     }
@@ -139,8 +143,8 @@ export async function POST(req: NextRequest) {
       "--cctv2-front", String(cctv2),
       "--no-gui",
     ];
-    if (cctv3) args.push("--cctv3-side-left", String(cctv3));
-    if (cctv4) args.push("--cctv4-side-right", String(cctv4));
+    if (cctv3 && cctv3 !== "0") args.push("--cctv3-side-left", String(cctv3));
+    if (cctv4 && cctv4 !== "0") args.push("--cctv4-side-right", String(cctv4));
 
     console.log(`[API /start-stream] Launching Python orchestrator: python ${args.join(" ")}`);
 

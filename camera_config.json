@@ -1,9 +1,20 @@
 {
   "cctv1": "0",
+  "cctv1_status": "ONLINE",
   "cctv2": "http://192.168.1.5:8080/video",
   "cctv2_ip": "192.168.1.5",
   "cctv2_port": 8080,
   "cctv2_endpoint": "/video",
-  "updated_at": "2026-10-11T18:55:00.946149+00:00",
-  "cctv2_status": "ONLINE"
+  "cctv2_status": "ONLINE",
+  "cctv3": "http://192.168.1.50:8080/video",
+  "cctv3_ip": "192.168.1.50",
+  "cctv3_port": 8080,
+  "cctv3_endpoint": "/video",
+  "cctv3_status": "DISCONNECTED",
+  "cctv4": "",
+  "cctv4_ip": "",
+  "cctv4_port": 8080,
+  "cctv4_endpoint": "/video",
+  "cctv4_status": "STANDBY",
+  "updated_at": "2026-10-11T19:19:29.565Z"
 }

@@ -118,9 +118,25 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     return target;
   }, [camera.stream_url, camera.camera_id, showFallbackSim, defaultStreamEndpoint]);
 
+  const phoneChannel = useMemo<"cctv2" | "cctv3" | "cctv4">(() => {
+    const id = (camera.camera_id || "").toLowerCase();
+    if (id.includes("3") || id.includes("left") || id === "cam_02") return "cctv3";
+    if (id.includes("4") || id.includes("right") || id === "cam_03") return "cctv4";
+    return "cctv2";
+  }, [camera.camera_id]);
+
+  const phoneButtonLabel = useMemo(() => {
+    if (phoneChannel === "cctv3") return "Phone 2 IP";
+    if (phoneChannel === "cctv4") return "Phone 3 IP";
+    return "Phone 1 IP";
+  }, [phoneChannel]);
+
   const snapshotUrl = useMemo(() => {
     const camId = (camera.camera_id || "").toLowerCase();
-    const endpoint = camId.includes("1") || camId.includes("gate") ? "cctv1" : "cctv2";
+    let endpoint = "cctv2";
+    if (camId.includes("1") || camId.includes("gate") || camId === "cam_00") endpoint = "cctv1";
+    else if (camId.includes("3") || camId.includes("left") || camId === "cam_02") endpoint = "cctv3";
+    else if (camId.includes("4") || camId.includes("right") || camId === "cam_03") endpoint = "cctv4";
     let base = `http://localhost:5000/snapshot/${endpoint}`;
     if (typeof window !== "undefined" && base.includes("localhost:5000")) {
       const hostname = window.location.hostname || "localhost";
@@ -164,14 +180,10 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const handleStartEngine = async () => {
     setIsStartingEngine(true);
     try {
-      const isCctv1 = (camera.camera_id || "").toLowerCase().includes("1");
-      const cctv1 = isCctv1 ? (camera.stream_url || "0") : "0";
-      const cctv2 = !isCctv1 ? (camera.stream_url || "http://192.168.1.5:8080/video") : "http://192.168.1.5:8080/video";
-
       await fetch("/api/cameras/start-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cctv1, cctv2, forceRestart: true }),
+        body: JSON.stringify({ forceRestart: false }),
       });
       // Wait for port 5000 to be ready then refresh
       setTimeout(() => {
@@ -211,11 +223,11 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       ) return true;
       if (
         (targetId === "CCTV_03" || targetId.includes("LEFT") || targetId === "CAM_02" || targetId.includes("CCTV3")) &&
-        (wCam === "CAM_02" || wCam.includes("CCTV_03") || wCam.includes("CCTV3"))
+        (wCam === "CAM_02" || wCam.includes("CCTV_03") || wCam.includes("CCTV3") || wCam === "CAM_02_PHONE2")
       ) return true;
       if (
         (targetId === "CCTV_04" || targetId.includes("RIGHT") || targetId === "CAM_03" || targetId.includes("CCTV4")) &&
-        (wCam === "CAM_03" || wCam.includes("CCTV_04") || wCam.includes("CCTV4"))
+        (wCam === "CAM_03" || wCam.includes("CCTV_04") || wCam.includes("CCTV4") || wCam === "CAM_03_PHONE3")
       ) return true;
       return false;
     });
@@ -464,10 +476,10 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                   ? "bg-cyan-500/25 text-cyan-200 border-cyan-400 shadow-sm"
                   : "bg-cyan-500/10 text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/20"
               )}
-              title="Configure Phone Camera IP Address & Stream Settings"
+              title={`Configure ${phoneButtonLabel} Address & Stream Settings`}
             >
               <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Phone IP</span>
+              <span>{phoneButtonLabel}</span>
             </button>
           )}
 
@@ -493,6 +505,8 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       {showPhoneSettings && !isCctv1 && (
         <div className="border-b border-[#26303C] animate-in fade-in duration-150">
           <PhoneCameraSettings
+            channel={phoneChannel}
+            cameraName={camera.name}
             onStreamUpdated={() => {
               setStreamError(false);
               setStreamKey((k) => k + 1);

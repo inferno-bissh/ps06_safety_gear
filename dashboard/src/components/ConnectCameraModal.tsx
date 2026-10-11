@@ -94,24 +94,20 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
 
   // Generate python orchestrator launch command
   const generatedCommand = useMemo(() => {
-    let cctv1 = "0";
-    let cctv2 = `"http://192.168.1.5:8080/video"`;
-    let cctv3 = "";
-
     const c1 = cameras.find((c) => c.camera_id === "CCTV_01");
     const c2 = cameras.find((c) => c.camera_id === "CCTV_02");
+    const c3 = cameras.find((c) => c.camera_id === "CCTV_03");
+    const c4 = cameras.find((c) => c.camera_id === "CCTV_04");
 
     const c1Url = selectedCamId === "CCTV_01" ? normalizedStreamUrl : (c1?.stream_url || "");
     const c2Url = selectedCamId === "CCTV_02" ? normalizedStreamUrl : (c2?.stream_url || "");
+    const c3Url = selectedCamId === "CCTV_03" ? normalizedStreamUrl : (c3?.stream_url || "");
+    const c4Url = selectedCamId === "CCTV_04" ? normalizedStreamUrl : (c4?.stream_url || "");
 
-    if (c1Url && !c1Url.includes(":5000")) {
-      cctv1 = c1Url.includes("http") ? `"${c1Url}"` : c1Url;
-    }
-    if (c2Url && !c2Url.includes(":5000")) {
-      cctv2 = c2Url.includes("http") ? `"${c2Url}"` : `"${c2Url || "http://192.168.1.5:8080/video"}"`;
-    }
-
-    return `python vision_pipeline/multicam_orchestrator.py --cctv1-gate ${cctv1} --cctv2-front ${cctv2}${cctv3}`;
+    let cmd = `python vision_pipeline/multicam_orchestrator.py --cctv1-gate ${c1Url && !c1Url.includes(":5000") ? c1Url : "0"} --cctv2-front ${c2Url && !c2Url.includes(":5000") ? `"${c2Url}"` : `"http://192.168.1.5:8080/video"`}`;
+    if (c3Url && !c3Url.includes(":5000")) cmd += ` --cctv3-side-left "${c3Url}"`;
+    if (c4Url && !c4Url.includes(":5000")) cmd += ` --cctv4-side-right "${c4Url}"`;
+    return cmd;
   }, [selectedCamId, normalizedStreamUrl, cameras]);
 
   const handleTestConnection = async () => {
@@ -170,12 +166,20 @@ export const ConnectCameraModal: React.FC<ConnectCameraModalProps> = ({
         status: "ONLINE",
       });
 
+      const channelMap: Record<string, string> = {
+        CCTV_01: "cctv1",
+        CCTV_02: "cctv2",
+        CCTV_03: "cctv3",
+        CCTV_04: "cctv4",
+      };
+      const channel = channelMap[selectedCamId] || "cctv2";
+
       // Dynamically update the camera source via /api/cameras/config without dropping other feeds
       await fetch("/api/cameras/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          channel: selectedCamId === "CCTV_01" ? "cctv1" : "cctv2",
+          channel,
           url: normalizedStreamUrl,
           action: "connect",
         }),

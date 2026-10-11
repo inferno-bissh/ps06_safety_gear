@@ -3,12 +3,10 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Smartphone,
-  Wifi,
   Radio,
   RefreshCw,
   Check,
   AlertTriangle,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
   PowerOff,
@@ -16,42 +14,76 @@ import {
   Info,
 } from "lucide-react";
 
+export type PhoneChannel = "cctv2" | "cctv3" | "cctv4";
+
 interface PhoneCameraSettingsProps {
   className?: string;
-  onStreamUpdated?: (newUrl: string) => void;
+  channel?: PhoneChannel;
+  cameraName?: string;
+  onStreamUpdated?: (newUrl: string, channel: PhoneChannel) => void;
   compact?: boolean;
 }
 
+const CHANNEL_INFO: Record<PhoneChannel, { name: string; slot: string; defaultPort: number; role: string }> = {
+  cctv2: {
+    name: "Phone 1",
+    slot: "CCTV 2",
+    defaultPort: 8080,
+    role: "Front Bay / Production Overhead",
+  },
+  cctv3: {
+    name: "Phone 2",
+    slot: "CCTV 3",
+    defaultPort: 8080,
+    role: "Left Side Cross-Angle View",
+  },
+  cctv4: {
+    name: "Phone 3",
+    slot: "CCTV 4",
+    defaultPort: 8080,
+    role: "Right Side Cross-Angle View",
+  },
+};
+
 export function PhoneCameraSettings({
   className = "",
+  channel: initialChannel,
+  cameraName,
   onStreamUpdated,
   compact = false,
 }: PhoneCameraSettingsProps) {
+  // If no fixed channel is passed, allow tab selection across Phone 1, Phone 2, Phone 3
+  const [selectedChannel, setSelectedChannel] = useState<PhoneChannel>(initialChannel || "cctv2");
+  const activeChannel = initialChannel || selectedChannel;
+
   const [ipInput, setIpInput] = useState("");
   const [portInput, setPortInput] = useState("8080");
   const [endpointInput, setEndpointInput] = useState("/video");
-  const [configuredUrl, setConfiguredUrl] = useState("http://192.168.1.5:8080/video");
-  const [configuredIp, setConfiguredIp] = useState("192.168.1.5");
-  const [connectionStatus, setConnectionStatus] = useState<"ONLINE" | "STANDBY" | "CONNECTING" | "DISCONNECTED">("STANDBY");
+  const [configuredUrl, setConfiguredUrl] = useState("");
+  const [configuredIp, setConfiguredIp] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState<
+    "ONLINE" | "STANDBY" | "CONNECTING" | "DISCONNECTED" | "FAILED"
+  >("STANDBY");
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isProbing, setIsProbing] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error" | "info";
     title: string;
     message: string;
   } | null>(null);
 
-  // Load saved configuration on mount
+  // Load saved configuration for the active channel
   useEffect(() => {
     let isMounted = true;
     const fetchConfig = async () => {
-      // 1. Try local storage first for instant UI response
+      // 1. LocalStorage cached IP for this specific channel
       try {
-        const localSaved = localStorage.getItem("safety_phone_cam_ip");
+        const localSaved = localStorage.getItem(`safety_phone_cam_ip_${activeChannel}`);
         if (localSaved && isMounted) {
           setIpInput(localSaved);
+        } else {
+          setIpInput("");
         }
       } catch {}
 
@@ -62,20 +94,27 @@ export function PhoneCameraSettings({
         const data = await res.json();
         if (isMounted && data.config) {
           const cfg = data.config;
-          const url = cfg.cctv2 || "http://192.168.1.5:8080/video";
-          const ip = cfg.cctv2_ip || url.replace(/^https?:\/\//, "").split(":")[0];
-          const port = String(cfg.cctv2_port || 8080);
-          const ep = cfg.cctv2_endpoint || "/video";
+          const url = cfg[activeChannel] || "";
+          const ip = cfg[`${activeChannel}_ip`] || (url ? url.replace(/^https?:\/\//, "").split(":")[0] : "");
+          const port = String(cfg[`${activeChannel}_port`] || CHANNEL_INFO[activeChannel].defaultPort);
+          const ep = cfg[`${activeChannel}_endpoint`] || "/video";
+          const status = cfg[`${activeChannel}_status`];
 
           setConfiguredUrl(url);
           setConfiguredIp(ip);
           setPortInput(port);
           setEndpointInput(ep);
-          if (!ipInput) setIpInput(ip);
+          if (ip) setIpInput(ip);
 
-          if (data.liveStatus?.cctv2?.is_connected) {
+          const liveConnected = data.liveStatus?.[activeChannel]?.is_connected;
+          if (liveConnected) {
             setConnectionStatus("ONLINE");
-          } else if (cfg.cctv2_status === "DISCONNECTED") {
+            if (data.liveStatus[activeChannel]?.latency_sec !== undefined) {
+              setLatencyMs(Math.round(data.liveStatus[activeChannel].latency_sec * 1000));
+            }
+          } else if (status === "DISCONNECTED") {
+            setConnectionStatus("DISCONNECTED");
+          } else if (!url) {
             setConnectionStatus("DISCONNECTED");
           } else {
             setConnectionStatus("STANDBY");
@@ -90,11 +129,11 @@ export function PhoneCameraSettings({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [activeChannel]);
 
   // Compute normalized stream target URL
   const normalizedUrl = useMemo(() => {
-    let raw = ipInput.trim();
+    const raw = ipInput.trim();
     if (!raw) return configuredUrl;
 
     if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("rtsp://")) {
@@ -119,14 +158,14 @@ export function PhoneCameraSettings({
     return `http://${raw}:${port}${ep}`;
   }, [ipInput, portInput, endpointInput, configuredUrl]);
 
-  // Connect / Update phone camera IP
+  // Connect / Update phone camera IP for this channel
   const handleConnect = async (customUrl?: string) => {
     const targetUrl = customUrl || normalizedUrl;
-    if (!targetUrl || targetUrl === "http://:8080/video") {
+    if (!targetUrl || targetUrl === "http://:8080/video" || targetUrl === "0") {
       setFeedback({
         type: "error",
         title: "Invalid Phone Address",
-        message: "Please enter the phone's IP address displayed on your IP Webcam screen.",
+        message: `Please enter the IP address displayed on ${CHANNEL_INFO[activeChannel].name}'s camera screen.`,
       });
       return;
     }
@@ -140,7 +179,7 @@ export function PhoneCameraSettings({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          channel: "cctv2",
+          channel: activeChannel,
           url: targetUrl,
           ip: ipInput.trim() || undefined,
           port: portInput.trim() || undefined,
@@ -155,41 +194,41 @@ export function PhoneCameraSettings({
         setConfiguredIp(data.ip || ipInput.trim());
         setLatencyMs(data.latencyMs || null);
 
-        // Remember in browser localStorage across reloads
+        // Remember in browser localStorage per channel
         try {
-          localStorage.setItem("safety_phone_cam_ip", data.ip || ipInput.trim());
-          localStorage.setItem("safety_phone_cam_url", data.streamUrl);
+          localStorage.setItem(`safety_phone_cam_ip_${activeChannel}`, data.ip || ipInput.trim());
+          localStorage.setItem(`safety_phone_cam_url_${activeChannel}`, data.streamUrl);
         } catch {}
 
         if (data.reachable) {
           setConnectionStatus("ONLINE");
           setFeedback({
             type: "success",
-            title: "Phone Camera Connected",
-            message: `Stream active via ${data.streamUrl} (${data.latencyMs}ms latency). CCTV 1 webcam remains uninterrupted.`,
+            title: `${CHANNEL_INFO[activeChannel].name} (${CHANNEL_INFO[activeChannel].slot}) Connected`,
+            message: `Stream active via ${data.streamUrl} (${data.latencyMs}ms latency). CCTV 1 webcam and other cameras remain completely uninterrupted.`,
           });
         } else {
           setConnectionStatus("STANDBY");
           setFeedback({
             type: "info",
             title: "Saved — Standby Mode Active",
-            message: `Target saved as ${data.streamUrl}. Note: Phone camera server is not responding yet. Ensure phone & laptop are on the same Wi-Fi and IP Webcam 'Start server' is running. Auto-reconnect is actively listening.`,
+            message: `Target saved as ${data.streamUrl}. Phone server is not responding yet. Ensure ${CHANNEL_INFO[activeChannel].name} is on the same Wi-Fi and IP Webcam 'Start server' is running. Auto-reconnect is actively listening.`,
           });
         }
 
         if (onStreamUpdated) {
-          onStreamUpdated(data.streamUrl);
+          onStreamUpdated(data.streamUrl, activeChannel);
         }
       } else {
-        setConnectionStatus("STANDBY");
+        setConnectionStatus("FAILED");
         setFeedback({
           type: "error",
           title: "Connection Failed",
-          message: data.error || "Could not reach camera. Please verify the IP address.",
+          message: data.error || `Could not reach ${CHANNEL_INFO[activeChannel].name}. Please verify the IP address.`,
         });
       }
     } catch (e: unknown) {
-      setConnectionStatus("STANDBY");
+      setConnectionStatus("FAILED");
       setFeedback({
         type: "error",
         title: "Network Error",
@@ -202,6 +241,10 @@ export function PhoneCameraSettings({
 
   // Reconnect button
   const handleReconnect = () => {
+    if (!configuredUrl) {
+      handleConnect();
+      return;
+    }
     handleConnect(configuredUrl);
   };
 
@@ -212,14 +255,17 @@ export function PhoneCameraSettings({
       await fetch("/api/cameras/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "cctv2", action: "disconnect" }),
+        body: JSON.stringify({ channel: activeChannel, action: "disconnect" }),
       });
       setConnectionStatus("DISCONNECTED");
       setFeedback({
         type: "info",
-        title: "Camera Disconnected",
-        message: "CCTV 2 stream put in standby mode. CCTV 1 webcam continues operating normally.",
+        title: `${CHANNEL_INFO[activeChannel].slot} Disconnected`,
+        message: `${CHANNEL_INFO[activeChannel].slot} put in standby mode. CCTV 1 (webcam) and other phone streams continue running normally.`,
       });
+      if (onStreamUpdated) {
+        onStreamUpdated("", activeChannel);
+      }
     } catch {
       setConnectionStatus("DISCONNECTED");
     } finally {
@@ -227,10 +273,42 @@ export function PhoneCameraSettings({
     }
   };
 
+  const channelMeta = CHANNEL_INFO[activeChannel];
+
   return (
     <div
       className={`bg-[#0D1219] border border-[#222E3C] rounded-xl p-3.5 sm:p-4 text-xs font-mono text-slate-200 transition-all ${className}`}
     >
+      {/* Multi-Channel Tab Bar (only shown if channel was not hardcoded by prop) */}
+      {!initialChannel && (
+        <div className="flex items-center gap-1 mb-3.5 pb-2.5 border-b border-[#1E2938] overflow-x-auto">
+          {(["cctv2", "cctv3", "cctv4"] as PhoneChannel[]).map((ch) => {
+            const info = CHANNEL_INFO[ch];
+            const isSelected = activeChannel === ch;
+            return (
+              <button
+                key={ch}
+                type="button"
+                onClick={() => {
+                  setSelectedChannel(ch);
+                  setFeedback(null);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 border ${
+                  isSelected
+                    ? "bg-cyan-500/20 text-cyan-200 border-cyan-400 shadow-sm"
+                    : "bg-[#141B24] text-slate-400 hover:text-slate-200 border-[#26303C] hover:bg-slate-800"
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+                <span>
+                  {info.name} ({info.slot})
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[#1E2938]">
         <div className="flex items-center gap-2">
@@ -238,10 +316,11 @@ export function PhoneCameraSettings({
             <Smartphone className="w-4 h-4" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-bold text-slate-100 uppercase tracking-wide text-xs sm:text-sm">
-                Phone Camera Settings (CCTV 2)
+                {cameraName || `${channelMeta.name} Settings (${channelMeta.slot})`}
               </h3>
+              <span className="text-[10px] text-slate-400 hidden sm:inline">• {channelMeta.role}</span>
               <span
                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                   connectionStatus === "ONLINE"
@@ -250,22 +329,26 @@ export function PhoneCameraSettings({
                     ? "bg-amber-500/15 text-amber-400 border-amber-500/30 animate-pulse"
                     : connectionStatus === "DISCONNECTED"
                     ? "bg-slate-800 text-slate-400 border-slate-700"
+                    : connectionStatus === "FAILED"
+                    ? "bg-red-500/15 text-red-400 border-red-500/30"
                     : "bg-amber-500/10 text-amber-300 border-amber-500/20"
                 }`}
               >
                 {connectionStatus === "ONLINE"
-                  ? `LIVE STREAMING${latencyMs ? ` (${latencyMs}ms)` : ""}`
+                  ? `CONNECTED${latencyMs ? ` (${latencyMs}ms)` : ""}`
                   : connectionStatus === "CONNECTING"
                   ? "CONNECTING..."
                   : connectionStatus === "DISCONNECTED"
                   ? "DISCONNECTED"
+                  : connectionStatus === "FAILED"
+                  ? "CONNECTION FAILED"
                   : "AUTO-RECONNECT STANDBY"}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Current Address:{" "}
+              Current Stream:{" "}
               <code className="text-cyan-300 bg-slate-900/80 px-1.5 py-0.5 rounded border border-slate-800">
-                {configuredUrl}
+                {configuredUrl || "Not Configured (Standby Mode)"}
               </code>
             </p>
           </div>
@@ -300,7 +383,7 @@ export function PhoneCameraSettings({
       <div className="mt-3 space-y-3">
         <div>
           <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-            Phone IP Address:
+            {channelMeta.name} IP Address / Stream URL:
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1">
@@ -309,12 +392,12 @@ export function PhoneCameraSettings({
                 value={ipInput}
                 onChange={(e) => setIpInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleConnect()}
-                placeholder="e.g. 192.168.1.42 or 192.168.1.42:8080"
+                placeholder={`e.g. 192.168.1.X or http://192.168.1.X:${channelMeta.defaultPort}/video`}
                 className="w-full bg-[#141B24] border border-[#283545] focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-500 text-xs sm:text-sm font-mono outline-none transition-all"
               />
               {ipInput && (
                 <div className="text-[10px] text-blue-400 mt-1 truncate">
-                  Will connect to: <span className="font-semibold">{normalizedUrl}</span>
+                  Target feed: <span className="font-semibold">{normalizedUrl}</span>
                 </div>
               )}
             </div>
@@ -332,7 +415,7 @@ export function PhoneCameraSettings({
               ) : (
                 <>
                   <Radio className="w-4 h-4" />
-                  <span>Connect &amp; Switch Feed</span>
+                  <span>Connect {channelMeta.slot}</span>
                 </>
               )}
             </button>
@@ -347,9 +430,6 @@ export function PhoneCameraSettings({
             onClick={() => {
               setPortInput("8080");
               setEndpointInput("/video");
-              if (!ipInput.includes(":")) {
-                setIpInput(configuredIp || "192.168.1.5");
-              }
             }}
             className="text-[11px] bg-[#161F2B] hover:bg-slate-800 text-slate-300 border border-[#26303C] px-2.5 py-1 rounded-md transition-colors"
           >
@@ -360,9 +440,6 @@ export function PhoneCameraSettings({
             onClick={() => {
               setPortInput("4747");
               setEndpointInput("/video");
-              if (!ipInput.includes(":")) {
-                setIpInput(configuredIp || "192.168.1.5");
-              }
             }}
             className="text-[11px] bg-[#161F2B] hover:bg-slate-800 text-slate-300 border border-[#26303C] px-2.5 py-1 rounded-md transition-colors"
           >
@@ -383,9 +460,7 @@ export function PhoneCameraSettings({
         {showAdvanced && (
           <div className="p-3 bg-[#121820] border border-slate-800 rounded-lg grid grid-cols-1 sm:grid-cols-2 gap-2.5 animate-in fade-in duration-150">
             <div>
-              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">
-                Port Number:
-              </label>
+              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Port Number:</label>
               <input
                 type="number"
                 value={portInput}
@@ -438,13 +513,14 @@ export function PhoneCameraSettings({
         <div className="p-2.5 bg-slate-900/60 border border-slate-800/80 rounded-lg text-[11px] text-slate-400 space-y-1">
           <div className="font-bold text-slate-300 flex items-center gap-1.5">
             <Info className="w-3.5 h-3.5 text-blue-400" />
-            <span>How to Reconnect after Phone IP changes:</span>
+            <span>Connection Guide for {channelMeta.name} ({channelMeta.slot}):</span>
           </div>
           <ol className="list-decimal list-inside space-y-0.5 text-slate-400 text-[10px] leading-relaxed">
-            <li>Ensure the phone is connected to the same Wi-Fi/Hotspot as this laptop.</li>
-            <li>In Android <strong>IP Webcam</strong>, tap <em>&quot;Start server&quot;</em> and note the IP on the phone screen (e.g. <code>192.168.1.X:8080</code>).</li>
-            <li>Type the new IP address above and press <strong>Connect &amp; Switch Feed</strong>.</li>
-            <li>The feed will immediately switch to the new phone camera without interrupting CCTV 1 webcam.</li>
+            <li>Connect this phone to the same Wi-Fi/Hotspot network as this dashboard laptop.</li>
+            <li>In the phone camera app (e.g. <strong>IP Webcam</strong>), tap <em>&quot;Start server&quot;</em>.</li>
+            <li>Note the IP shown on the phone screen (e.g. <code>192.168.1.X:8080</code>).</li>
+            <li>Enter the IP address above and click <strong>Connect {channelMeta.slot}</strong>.</li>
+            <li>CCTV 1 (laptop webcam) and other cameras remain completely operational throughout.</li>
           </ol>
         </div>
       </div>
