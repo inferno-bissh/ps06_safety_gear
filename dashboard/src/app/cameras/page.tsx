@@ -196,14 +196,18 @@ export default function CamerasPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {cameras.map((camera, idx) => {
               const zone = zones.find((z) => z.zone_id === camera.zone_id);
+              const camHazard = liveHazard?.cameras?.[camera.camera_id];
+              const isFire = camHazard ? camHazard.fire : (liveHazard?.fire && idx === 1) || Boolean(zone?.fire_detected);
+              const isSmoke = camHazard ? camHazard.smoke : (liveHazard?.smoke && idx === 1) || Boolean(zone?.smoke_detected);
+
               return (
                 <CameraViewer
                   key={camera.camera_id ? `${camera.camera_id}-${idx}` : `cam-${idx}`}
                   camera={camera}
                   workers={workerTracks}
                   zoneName={zone?.name || camera.zone_id}
-                  hasFireHazard={liveHazard?.fire || zone?.fire_detected}
-                  hasSmokeHazard={liveHazard?.smoke || zone?.smoke_detected}
+                  hasFireHazard={isFire}
+                  hasSmokeHazard={isSmoke}
                   onConnectIp={(cam) => {
                     setModalCameraId(cam.camera_id);
                     setIsConnectModalOpen(true);

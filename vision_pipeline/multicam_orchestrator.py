@@ -32,6 +32,7 @@ from web_streamer import (
     WebStreamBroadcaster,
     get_hazard_state,
     set_hazard_state,
+    update_camera_hazard,
     register_camera_callbacks,
     get_standby_numpy_frame,
 )
@@ -175,12 +176,51 @@ class MultiCameraOrchestrator:
         self.cctv4_workers = []
         self.last_cctv3_eval_time: float = 0.0
         self.last_cctv4_eval_time: float = 0.0
-        self.last_smoke_incident_time: float = 0.0
-        self.last_fire_incident_time: float = 0.0
-        self.last_cctv3_ts: float = 0.0
-        self.last_cctv4_ts: float = 0.0
-        self.smoke_active_prev: bool = False
-        self.fire_active_prev: bool = False
+        # 4b. Load Fire & Smoke Detection Model safely (Ultralytics YOLOv8)
+        fire_model_path = BASE_DIR / "models" / "fire_smoke_yolov8n.pt"
+        if fire_model_path.exists():
+            print(f"[AI Engine] Loading Fire & Smoke YOLO model from: {fire_model_path.name}...")
+            try:
+                self.fire_smoke_model = YOLO(str(fire_model_path))
+                self.fire_smoke_classes = self.fire_smoke_model.names
+                print(f"[AI Engine] Fire/Smoke model classes verified: {self.fire_smoke_classes}")
+            except Exception as e:
+                print(f"[AI Engine Error] Failed to load fire/smoke model: {e}")
+                self.fire_smoke_model = None
+                self.fire_smoke_classes = {0: "smoke", 1: "fire"}
+        else:
+            print(f"[AI Engine Warning] Fire/Smoke model not found at {fire_model_path}!")
+            self.fire_smoke_model = None
+            self.fire_smoke_classes = {0: "smoke", 1: "fire"}
+
+        # Per-camera hazard metadata, status tracking, debounce counters, and incident cooldowns
+        self.camera_hazard_meta = {
+            "CCTV_01": {"name": "Gate Entry Choke-Point", "zone_id": "GATE_ZONE", "zone_name": "Main Entrance Gate"},
+            "CCTV_02": {"name": "Production Bay", "zone_id": "WELDING_ZONE", "zone_name": "Welding & Fabrication Bay"},
+            "CCTV_03": {"name": "Side Angle Left", "zone_id": "WELDING_ZONE", "zone_name": "Welding & Fabrication Bay"},
+            "CCTV_04": {"name": "Side Angle Right", "zone_id": "WELDING_ZONE", "zone_name": "Welding & Fabrication Bay"},
+        }
+        self.camera_hazard_states = {
+            cid: {
+                "fire": False,
+                "smoke": False,
+                "fire_confidence": 0.0,
+                "smoke_confidence": 0.0,
+                "fire_boxes": [],
+                "smoke_boxes": [],
+                "status": "DISCONNECTED",
+                "last_seen": 0.0,
+            }
+            for cid in ("CCTV_01", "CCTV_02", "CCTV_03", "CCTV_04")
+        }
+        self.fire_consecutive = {"CCTV_01": 0, "CCTV_02": 0, "CCTV_03": 0, "CCTV_04": 0}
+        self.smoke_consecutive = {"CCTV_01": 0, "CCTV_02": 0, "CCTV_03": 0, "CCTV_04": 0}
+        self.last_fire_incident_time = {"CCTV_01": 0.0, "CCTV_02": 0.0, "CCTV_03": 0.0, "CCTV_04": 0.0}
+        self.last_smoke_incident_time = {"CCTV_01": 0.0, "CCTV_02": 0.0, "CCTV_03": 0.0, "CCTV_04": 0.0}
+        self.manual_last_smoke_incident_time: float = 0.0
+        self.manual_last_fire_incident_time: float = 0.0
+        self.hazard_round_robin_idx = 0
+        self.last_hazard_eval_time = 0.0
 
         # Pre-seed a checked-in worker for demo fallback if empty
         if len(self.active_checked_in_workers) == 0 and len(self.face_engine.database.get("names", [])) > 0:
@@ -1111,6 +1151,232 @@ class MultiCameraOrchestrator:
 
         return aux_workers
 
+    def evaluate_camera_hazard(self, frame: Optional[np.ndarray], camera_id: str, is_active: bool, ts: float):
+        """
+        Evaluates fire and smoke hazard detection on a specific camera channel using the
+        pre-loaded fire_smoke_yolov8n.pt model. Applies confidence thresholds, consecutive-evaluation
+        debouncing to reject transient spikes, and incident deduplication with cooldowns.
+        """
+        cam_id = camera_id.upper().strip()
+        meta = self.camera_hazard_meta.get(cam_id, {
+            "name": f"Camera {cam_id}",
+            "zone_id": self.zone_id,
+            "zone_name": ZONE_NAME
+        })
+
+        # 1. Stale / Disconnected Stream Handling
+        if not is_active or frame is None:
+            self.fire_consecutive[cam_id] = 0
+            self.smoke_consecutive[cam_id] = 0
+            prev_fire = self.camera_hazard_states[cam_id]["fire"]
+            prev_smoke = self.camera_hazard_states[cam_id]["smoke"]
+
+            self.camera_hazard_states[cam_id] = {
+                "fire": False,
+                "smoke": False,
+                "fire_confidence": 0.0,
+                "smoke_confidence": 0.0,
+                "fire_boxes": [],
+                "smoke_boxes": [],
+                "status": "DISCONNECTED",
+                "last_seen": ts,
+            }
+            update_camera_hazard(
+                camera_id=cam_id,
+                fire=False,
+                smoke=False,
+                fire_confidence=0.0,
+                smoke_confidence=0.0,
+                fire_boxes=[],
+                smoke_boxes=[],
+                status="DISCONNECTED"
+            )
+            if prev_fire or prev_smoke:
+                self._check_and_reset_zone_hazard(meta["zone_id"])
+            return
+
+        if self.fire_smoke_model is None:
+            update_camera_hazard(camera_id=cam_id, status="MODEL_UNAVAILABLE")
+            return
+
+        # 2. Downscaled fast inference (flames & smoke plumes are macro visual features)
+        orig_h, orig_w = frame.shape[:2]
+        eval_w = 480
+        eval_h = max(120, int(orig_h * (eval_w / max(1, orig_w))))
+        eval_frame = cv2.resize(frame, (eval_w, eval_h))
+
+        try:
+            results = self.fire_smoke_model.predict(
+                eval_frame,
+                imgsz=384,
+                conf=0.30,
+                verbose=False,
+                device="cpu"
+            )
+        except Exception as e:
+            print(f"[Hazard Engine Warning] Inference failed for {cam_id}: {e}")
+            return
+
+        fire_detected_raw = False
+        smoke_detected_raw = False
+        fire_max_conf = 0.0
+        smoke_max_conf = 0.0
+        fire_boxes = []
+        smoke_boxes = []
+
+        # Model classes: {0: 'smoke', 1: 'fire'}
+        if results and len(results) > 0 and results[0].boxes is not None:
+            boxes = results[0].boxes
+            for b in boxes:
+                cls_id = int(b.cls[0].item())
+                conf = float(b.conf[0].item())
+                cls_name = self.fire_smoke_classes.get(cls_id, "").lower()
+
+                # Coordinate normalization to 0..100% relative coordinates
+                coords = b.xyxy[0].tolist()
+                x1, y1, x2, y2 = coords
+                norm_box = {
+                    "x": float(round((x1 / eval_w) * 100, 1)),
+                    "y": float(round((y1 / eval_h) * 100, 1)),
+                    "width": float(round(((x2 - x1) / eval_w) * 100, 1)),
+                    "height": float(round(((y2 - y1) / eval_h) * 100, 1)),
+                    "confidence": float(round(conf, 2)),
+                }
+
+                # Evaluate FIRE (Class 1 or 'fire'): Threshold >= 0.45
+                if (cls_id == 1 or "fire" in cls_name) and conf >= 0.45:
+                    fire_detected_raw = True
+                    if conf > fire_max_conf:
+                        fire_max_conf = conf
+                    fire_boxes.append(norm_box)
+
+                # Evaluate SMOKE (Class 0 or 'smoke'): Threshold >= 0.38
+                if (cls_id == 0 or "smoke" in cls_name) and conf >= 0.38:
+                    smoke_detected_raw = True
+                    if conf > smoke_max_conf:
+                        smoke_max_conf = conf
+                    smoke_boxes.append(norm_box)
+
+        # 3. Consecutive-evaluation debounce to eliminate transient 1-frame spikes
+        if fire_detected_raw:
+            self.fire_consecutive[cam_id] += 1
+        else:
+            self.fire_consecutive[cam_id] = 0
+
+        if smoke_detected_raw:
+            self.smoke_consecutive[cam_id] += 1
+        else:
+            self.smoke_consecutive[cam_id] = 0
+
+        confirmed_fire = self.fire_consecutive[cam_id] >= 2
+        confirmed_smoke = self.smoke_consecutive[cam_id] >= 2
+
+        prev_state = self.camera_hazard_states[cam_id]
+        prev_fire = prev_state["fire"]
+        prev_smoke = prev_state["smoke"]
+        now = time.time()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # 4. Fire Lifecycle & Firestore Deduplication (P3 Critical Takeover)
+        if confirmed_fire:
+            if not prev_fire or (now - self.last_fire_incident_time[cam_id] > 60.0):
+                fire_inc = {
+                    "incident_id": f"FIR-{cam_id}-{int(now) % 1000000:06d}",
+                    "facility_id": self.facility_id,
+                    "zone_id": meta["zone_id"],
+                    "zone_name": meta["zone_name"],
+                    "camera_id": cam_id,
+                    "source_event_type": "FIRE",
+                    "priority": "P3",
+                    "timestamp": now_iso,
+                    "confidence": float(round(fire_max_conf, 2)),
+                    "status": "OPEN",
+                    "required_action": "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
+                    "decision_reason": f"Active flame verified on {cam_id} ({meta['name']}) -> Critical P3 Emergency Takeover.",
+                    "evidence_image": "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+                    "vision_evidence": {
+                        "hazard": "FIRE",
+                        "fire": True,
+                        "smoke": confirmed_smoke,
+                        "confidence": float(round(fire_max_conf, 2)),
+                        "camera_id": cam_id,
+                    },
+                    "network_mode": "LAN",
+                }
+                print(f"\n[ALERT] P3 Fire Incident detected on {cam_id} ({meta['name']}) -> Pushing to Firestore...")
+                self.firestore.push_incident(fire_inc)
+                self.firestore.update_zone_priority(meta["zone_id"], "P3", fire_detected=True, smoke_detected=confirmed_smoke)
+                self.last_fire_incident_time[cam_id] = now
+        elif prev_fire and not confirmed_fire:
+            print(f"[Hazard Cleared] Fire cleared on camera {cam_id}")
+            self._check_and_reset_zone_hazard(meta["zone_id"])
+
+        # 5. Smoke Lifecycle & Firestore Deduplication (P2 Advisory)
+        if confirmed_smoke:
+            if not prev_smoke or (now - self.last_smoke_incident_time[cam_id] > 60.0):
+                smoke_inc = {
+                    "incident_id": f"SMK-{cam_id}-{int(now) % 1000000:06d}",
+                    "facility_id": self.facility_id,
+                    "zone_id": meta["zone_id"],
+                    "zone_name": meta["zone_name"],
+                    "camera_id": cam_id,
+                    "source_event_type": "SMOKE",
+                    "priority": "P2",
+                    "timestamp": now_iso,
+                    "confidence": float(round(smoke_max_conf, 2)),
+                    "status": "OPEN",
+                    "required_action": "INSPECTION REQUIRED — VISUAL SMOKE CLOUD DETECTED",
+                    "decision_reason": f"Elevated smoke plume verified on {cam_id} ({meta['name']}) -> P2 Advisory Incident.",
+                    "evidence_image": "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
+                    "vision_evidence": {
+                        "hazard": "SMOKE",
+                        "fire": False,
+                        "smoke": True,
+                        "confidence": float(round(smoke_max_conf, 2)),
+                        "camera_id": cam_id,
+                    },
+                    "sensor_evidence": {"smoke_index": float(round(smoke_max_conf, 2))},
+                    "network_mode": "LAN",
+                }
+                print(f"\n[ALERT] P2 Smoke Incident detected on {cam_id} ({meta['name']}) -> Pushing to Firestore...")
+                self.firestore.push_incident(smoke_inc)
+                self.firestore.update_zone_priority(meta["zone_id"], "P2", smoke_detected=True)
+                self.last_smoke_incident_time[cam_id] = now
+        elif prev_smoke and not confirmed_smoke:
+            print(f"[Hazard Cleared] Smoke cleared on camera {cam_id}")
+            self._check_and_reset_zone_hazard(meta["zone_id"])
+
+        # 6. Update local state and sync to web broadcaster
+        self.camera_hazard_states[cam_id] = {
+            "fire": confirmed_fire,
+            "smoke": confirmed_smoke,
+            "fire_confidence": float(round(fire_max_conf, 2)) if confirmed_fire else 0.0,
+            "smoke_confidence": float(round(smoke_max_conf, 2)) if confirmed_smoke else 0.0,
+            "fire_boxes": fire_boxes if confirmed_fire else [],
+            "smoke_boxes": smoke_boxes if confirmed_smoke else [],
+            "status": "ONLINE",
+            "last_seen": now,
+        }
+        update_camera_hazard(
+            camera_id=cam_id,
+            fire=confirmed_fire,
+            smoke=confirmed_smoke,
+            fire_confidence=fire_max_conf if confirmed_fire else 0.0,
+            smoke_confidence=smoke_max_conf if confirmed_smoke else 0.0,
+            fire_boxes=fire_boxes if confirmed_fire else [],
+            smoke_boxes=smoke_boxes if confirmed_smoke else [],
+            status="ONLINE"
+        )
+
+    def _check_and_reset_zone_hazard(self, zone_id: str):
+        """Helper to reset zone priority back to normal if no other active hazards remain in the zone."""
+        any_fire = any(s["fire"] for cid, s in self.camera_hazard_states.items() if self.camera_hazard_meta.get(cid, {}).get("zone_id") == zone_id)
+        any_smoke = any(s["smoke"] for cid, s in self.camera_hazard_states.items() if self.camera_hazard_meta.get(cid, {}).get("zone_id") == zone_id)
+        if not any_fire and not any_smoke:
+            self.firestore.update_zone_priority(zone_id, "P0", fire_detected=False, smoke_detected=False)
+        elif not any_fire and any_smoke:
+            self.firestore.update_zone_priority(zone_id, "P2", fire_detected=False, smoke_detected=True)
+
     def run(self):
         """Main multi-stream execution loop."""
         print("\n[Orchestrator Running] Ingesting Gate and Ward streams. Press 'q' to stop.")
@@ -1148,19 +1414,28 @@ class MultiCameraOrchestrator:
                     ward_resized = get_standby_numpy_frame("cctv2")
 
                 # 4. Process Aux streams (CCTV 3 & CCTV 4 for sustained person & PPE tracking)
+                f3 = None
+                f4 = None
                 if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
                     f3, ts3 = self.cctv3_stream.get_latest_frame(copy=False)
                     if f3 is not None:
                         if ts3 > self.last_cctv3_ts:
                             self.last_cctv3_ts = ts3
-                            self.web_broadcaster.update_frame("cctv3", cv2.resize(f3, (w_sub, h_sub)))
+                            c3_resized = cv2.resize(f3, (w_sub, h_sub))
+                            c3_haz = self.camera_hazard_states.get("CCTV_03", {})
+                            if c3_haz.get("fire"):
+                                cv2.rectangle(c3_resized, (10, 36), (w_sub - 10, 70), (0, 0, 230), -1)
+                                cv2.putText(c3_resized, f"CRITICAL: FLAME ON CCTV 3 [{c3_haz.get('fire_confidence', 0.9):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+                            elif c3_haz.get("smoke"):
+                                cv2.rectangle(c3_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
+                                cv2.putText(c3_resized, f"WARNING: SMOKE ON CCTV 3 [{c3_haz.get('smoke_confidence', 0.8):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+                            self.web_broadcaster.update_frame("cctv3", c3_resized)
                             if (now - self.last_cctv3_eval_time) >= 0.12:
                                 self.cctv3_workers = self.process_aux_camera_stream(
                                     f3, "CCTV_03", "WELDING_ZONE", self.cctv3_ppe_evaluator, self.cctv3_model, "cctv3"
                                 )
                                 self.last_cctv3_eval_time = now
                         elif (now - self.last_cctv3_ts) > 2.0:
-                            # Stream stalled / frozen: clear stale detections
                             self.cctv3_workers = []
                     else:
                         self.cctv3_workers = []
@@ -1174,14 +1449,21 @@ class MultiCameraOrchestrator:
                     if f4 is not None:
                         if ts4 > self.last_cctv4_ts:
                             self.last_cctv4_ts = ts4
-                            self.web_broadcaster.update_frame("cctv4", cv2.resize(f4, (w_sub, h_sub)))
+                            c4_resized = cv2.resize(f4, (w_sub, h_sub))
+                            c4_haz = self.camera_hazard_states.get("CCTV_04", {})
+                            if c4_haz.get("fire"):
+                                cv2.rectangle(c4_resized, (10, 36), (w_sub - 10, 70), (0, 0, 230), -1)
+                                cv2.putText(c4_resized, f"CRITICAL: FLAME ON CCTV 4 [{c4_haz.get('fire_confidence', 0.9):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+                            elif c4_haz.get("smoke"):
+                                cv2.rectangle(c4_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
+                                cv2.putText(c4_resized, f"WARNING: SMOKE ON CCTV 4 [{c4_haz.get('smoke_confidence', 0.8):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+                            self.web_broadcaster.update_frame("cctv4", c4_resized)
                             if (now - self.last_cctv4_eval_time) >= 0.12:
                                 self.cctv4_workers = self.process_aux_camera_stream(
                                     f4, "CCTV_04", "WELDING_ZONE", self.cctv4_ppe_evaluator, self.cctv4_model, "cctv4"
                                 )
                                 self.last_cctv4_eval_time = now
                         elif (now - self.last_cctv4_ts) > 2.0:
-                            # Stream stalled / frozen: clear stale detections
                             self.cctv4_workers = []
                     else:
                         self.cctv4_workers = []
@@ -1189,6 +1471,24 @@ class MultiCameraOrchestrator:
                     self.cctv4_workers = []
                     if not self.test_mode:
                         self.web_broadcaster.clear_frame("cctv4")
+
+                # Round-robin Fire & Smoke hazard evaluation across CCTV 1-4 (every 80ms)
+                if (now - self.last_hazard_eval_time) >= 0.08:
+                    self.last_hazard_eval_time = now
+                    is_c1_active = not getattr(self.gate_stream, "is_synthetic_mode", False)
+                    is_c2_active = not self.ward_stream.is_synthetic_mode
+                    is_c3_active = bool(self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode and (now - self.last_cctv3_ts <= 2.0))
+                    is_c4_active = bool(self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode and (now - self.last_cctv4_ts <= 2.0))
+
+                    active_cams = [
+                        ("CCTV_01", gate_frame, is_c1_active),
+                        ("CCTV_02", ward_frame if is_c2_active else None, is_c2_active),
+                        ("CCTV_03", f3 if is_c3_active else None, is_c3_active),
+                        ("CCTV_04", f4 if is_c4_active else None, is_c4_active),
+                    ]
+                    target_cid, target_frame, is_active = active_cams[self.hazard_round_robin_idx % len(active_cams)]
+                    self.hazard_round_robin_idx = (self.hazard_round_robin_idx + 1) % len(active_cams)
+                    self.evaluate_camera_hazard(target_frame, target_cid, is_active, now)
 
                 # Broadcast live worker tracking telemetry for dashboard
                 all_workers = gate_workers + ward_workers + self.cctv3_workers + self.cctv4_workers
@@ -1205,71 +1505,89 @@ class MultiCameraOrchestrator:
                 cv2.rectangle(ward_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
                 cv2.putText(ward_resized, f"[CCTV 2] PRODUCTION BAY (Front View) - {ZONE_NAME}", (12, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
 
-                # Check real-time environmental hazard state (Smoke / Fire)
-                hazard = get_hazard_state()
-                if hazard.get("smoke"):
-                    s_idx = float(hazard.get("smoke_index") or 0.85)
-                    cv2.rectangle(ward_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
-                    cv2.putText(ward_resized, f"WARNING: SMOKE HAZARD DETECTED (Index: {s_idx:.2f}) [P2]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2)
-                    if not self.smoke_active_prev or (time.time() - self.last_smoke_incident_time > 60.0):
-                        now_iso = datetime.now(timezone.utc).isoformat()
-                        smoke_inc = {
-                            "incident_id": f"SMK-{int(time.time()) % 1000000:06d}",
-                            "facility_id": self.facility_id,
-                            "zone_id": self.zone_id,
-                            "zone_name": ZONE_NAME,
-                            "camera_id": "CAM_01_WARD",
-                            "source_event_type": "SMOKE",
-                            "priority": "P2",
-                            "timestamp": now_iso,
-                            "confidence": 0.88,
-                            "status": "OPEN",
-                            "required_action": "INSPECTION REQUIRED — VISUAL SMOKE CLOUD DETECTED",
-                            "decision_reason": "Elevated smoke plume detected on CCTV 2 -> P2 Advisory Incident.",
-                            "evidence_image": "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
-                            "vision_evidence": {"fire": False, "smoke": True},
-                            "sensor_evidence": {"smoke_index": s_idx},
-                            "network_mode": "LAN",
-                        }
-                        print(f"\n[ALERT] P2 Smoke Incident triggered -> Pushing to Firestore...")
-                        self.firestore.push_incident(smoke_inc)
-                        self.firestore.update_zone_priority(self.zone_id, "P2", smoke_detected=True)
-                        self.last_smoke_incident_time = time.time()
-                    self.smoke_active_prev = True
-                elif self.smoke_active_prev:
-                    self.firestore.update_zone_priority(self.zone_id, "P0", smoke_detected=False)
-                    self.smoke_active_prev = False
+                # Render camera-specific hazard banners on CCTV 1 & CCTV 2 crops
+                c1_haz = self.camera_hazard_states.get("CCTV_01", {})
+                if c1_haz.get("fire"):
+                    cv2.rectangle(gate_resized, (10, 36), (w_sub - 10, 70), (0, 0, 230), -1)
+                    cv2.putText(gate_resized, f"CRITICAL: FLAME ON CCTV 1 [{c1_haz.get('fire_confidence', 0.9):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+                elif c1_haz.get("smoke"):
+                    cv2.rectangle(gate_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
+                    cv2.putText(gate_resized, f"WARNING: SMOKE ON CCTV 1 [{c1_haz.get('smoke_confidence', 0.8):.2f}]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
 
-                if hazard.get("fire"):
+                c2_haz = self.camera_hazard_states.get("CCTV_02", {})
+                hazard = get_hazard_state()
+                is_c2_fire = c2_haz.get("fire") or (hazard.get("fire") and hazard.get("active_camera_id") in (None, "CCTV_02", "MANUAL_SIM"))
+                is_c2_smoke = c2_haz.get("smoke") or (hazard.get("smoke") and hazard.get("active_camera_id") in (None, "CCTV_02", "MANUAL_SIM"))
+
+                if is_c2_smoke:
+                    s_idx = c2_haz.get("smoke_confidence") or float(hazard.get("smoke_index") or 0.85)
+                    cv2.rectangle(ward_resized, (10, 36), (w_sub - 10, 70), (0, 140, 255), -1)
+                    cv2.putText(ward_resized, f"WARNING: SMOKE HAZARD DETECTED (Index: {s_idx:.2f}) [P2]", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+
+                if is_c2_fire:
                     cv2.rectangle(ward_resized, (10, 74), (w_sub - 10, 108), (0, 0, 230), -1)
-                    cv2.putText(ward_resized, "CRITICAL: ACTIVE FLAME DETECTED [P3 TAKEOVER]", (18, 97), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2)
-                    if not self.fire_active_prev or (time.time() - self.last_fire_incident_time > 60.0):
-                        now_iso = datetime.now(timezone.utc).isoformat()
-                        fire_inc = {
-                            "incident_id": f"FIR-{int(time.time()) % 1000000:06d}",
-                            "facility_id": self.facility_id,
-                            "zone_id": self.zone_id,
-                            "zone_name": ZONE_NAME,
-                            "camera_id": "CAM_01_WARD",
-                            "source_event_type": "FIRE",
-                            "priority": "P3",
-                            "timestamp": now_iso,
-                            "confidence": 0.96,
-                            "status": "OPEN",
-                            "required_action": "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
-                            "decision_reason": "Flame verified on CCTV bay -> Critical P3 Emergency Takeover.",
-                            "evidence_image": "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
-                            "vision_evidence": {"fire": True, "smoke": True},
-                            "network_mode": "LAN",
-                        }
-                        print(f"\n[CRITICAL] P3 Fire Incident triggered -> Pushing to Firestore...")
-                        self.firestore.push_incident(fire_inc)
-                        self.firestore.update_zone_priority(self.zone_id, "P3", fire_detected=True, smoke_detected=True)
-                        self.last_fire_incident_time = time.time()
-                    self.fire_active_prev = True
-                elif self.fire_active_prev:
-                    self.firestore.update_zone_priority(self.zone_id, "P0", fire_detected=False)
-                    self.fire_active_prev = False
+                    cv2.putText(ward_resized, "CRITICAL: ACTIVE FLAME DETECTED [P3 TAKEOVER]", (18, 97), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+
+                # Manual simulation fallback for backward compatibility
+                if hazard.get("active_camera_id") == "MANUAL_SIM":
+                    if hazard.get("smoke"):
+                        if not self.smoke_active_prev or (now - self.manual_last_smoke_incident_time > 60.0):
+                            now_iso = datetime.now(timezone.utc).isoformat()
+                            smoke_inc = {
+                                "incident_id": f"SMK-{int(now) % 1000000:06d}",
+                                "facility_id": self.facility_id,
+                                "zone_id": self.zone_id,
+                                "zone_name": ZONE_NAME,
+                                "camera_id": "CAM_01_WARD",
+                                "source_event_type": "SMOKE",
+                                "priority": "P2",
+                                "timestamp": now_iso,
+                                "confidence": 0.88,
+                                "status": "OPEN",
+                                "required_action": "INSPECTION REQUIRED — VISUAL SMOKE CLOUD DETECTED",
+                                "decision_reason": "Manual simulated smoke plume -> P2 Advisory Incident.",
+                                "evidence_image": "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
+                                "vision_evidence": {"fire": False, "smoke": True},
+                                "sensor_evidence": {"smoke_index": float(hazard.get("smoke_index") or 0.88)},
+                                "network_mode": "LAN",
+                            }
+                            print("\n[ALERT] P2 Simulated Smoke Incident triggered -> Pushing to Firestore...")
+                            self.firestore.push_incident(smoke_inc)
+                            self.firestore.update_zone_priority(self.zone_id, "P2", smoke_detected=True)
+                            self.manual_last_smoke_incident_time = now
+                        self.smoke_active_prev = True
+                    elif self.smoke_active_prev:
+                        self.firestore.update_zone_priority(self.zone_id, "P0", smoke_detected=False)
+                        self.smoke_active_prev = False
+
+                    if hazard.get("fire"):
+                        if not self.fire_active_prev or (now - self.manual_last_fire_incident_time > 60.0):
+                            now_iso = datetime.now(timezone.utc).isoformat()
+                            fire_inc = {
+                                "incident_id": f"FIR-{int(now) % 1000000:06d}",
+                                "facility_id": self.facility_id,
+                                "zone_id": self.zone_id,
+                                "zone_name": ZONE_NAME,
+                                "camera_id": "CAM_01_WARD",
+                                "source_event_type": "FIRE",
+                                "priority": "P3",
+                                "timestamp": now_iso,
+                                "confidence": 0.96,
+                                "status": "OPEN",
+                                "required_action": "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
+                                "decision_reason": "Manual simulated flame -> Critical P3 Emergency Takeover.",
+                                "evidence_image": "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+                                "vision_evidence": {"fire": True, "smoke": True},
+                                "network_mode": "LAN",
+                            }
+                            print("\n[CRITICAL] P3 Simulated Fire Incident triggered -> Pushing to Firestore...")
+                            self.firestore.push_incident(fire_inc)
+                            self.firestore.update_zone_priority(self.zone_id, "P3", fire_detected=True, smoke_detected=True)
+                            self.manual_last_fire_incident_time = now
+                        self.fire_active_prev = True
+                    elif self.fire_active_prev:
+                        self.firestore.update_zone_priority(self.zone_id, "P0", fire_detected=False)
+                        self.fire_active_prev = False
 
                 composite = np.hstack([gate_resized, ward_resized])
 

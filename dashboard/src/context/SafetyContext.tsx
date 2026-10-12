@@ -29,6 +29,27 @@ import {
   seedDefaultFirestoreData,
 } from "../lib/firestoreService";
 
+export interface CameraHazardInfo {
+  camera_id: string;
+  fire: boolean;
+  smoke: boolean;
+  fire_confidence: number;
+  smoke_confidence: number;
+  fire_boxes?: any[];
+  smoke_boxes?: any[];
+  status?: string;
+  last_updated?: number;
+}
+
+export interface LiveHazardState {
+  smoke: boolean;
+  fire: boolean;
+  smoke_index: number;
+  cameras?: Record<string, CameraHazardInfo>;
+  active_camera_id?: string | null;
+  active_hazard_type?: "FIRE" | "SMOKE" | "BOTH" | "NONE";
+}
+
 interface SafetyContextType {
   facility: FacilityState;
   zones: Zone[];
@@ -44,7 +65,7 @@ interface SafetyContextType {
   dataSource: "FIRESTORE" | "SIMULATION";
   isFirebaseAvailable: boolean;
   activeScenario: string | null;
-  liveHazard: { smoke: boolean; fire: boolean; smoke_index: number };
+  liveHazard: LiveHazardState;
   isVisionEngineOnline: boolean;
   telemetryError: boolean;
   // Actions
@@ -365,10 +386,13 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isP3TakeoverActive, setIsP3TakeoverActive] = useState(false);
   const [p3EmergencyIncident, setP3EmergencyIncident] = useState<Incident | null>(null);
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
-  const [liveHazard, setLiveHazard] = useState<{ smoke: boolean; fire: boolean; smoke_index: number }>({
+  const [liveHazard, setLiveHazard] = useState<LiveHazardState>({
     smoke: false,
     fire: false,
     smoke_index: 0.0,
+    cameras: {},
+    active_camera_id: null,
+    active_hazard_type: "NONE",
   });
   const [isVisionEngineOnline, setIsVisionEngineOnline] = useState(false);
   const [telemetryError, setTelemetryError] = useState(false);
@@ -509,7 +533,14 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reset: true }),
         });
-        setLiveHazard({ smoke: false, fire: false, smoke_index: 0.0 });
+        setLiveHazard({
+          smoke: false,
+          fire: false,
+          smoke_index: 0.0,
+          cameras: {},
+          active_camera_id: null,
+          active_hazard_type: "NONE",
+        });
       } else if (type === "smoke") {
         const targetActive = active !== undefined ? active : !liveHazard.smoke;
         await fetch("/api/cameras/hazard", {
@@ -556,6 +587,9 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             smoke: !!h.smoke,
             fire: !!h.fire,
             smoke_index: typeof h.smoke_index === "number" ? h.smoke_index : 0.0,
+            cameras: h.cameras || {},
+            active_camera_id: h.active_camera_id || null,
+            active_hazard_type: h.active_hazard_type || "NONE",
           });
 
           if (h.fire) {

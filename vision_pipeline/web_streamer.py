@@ -20,28 +20,153 @@ _WORKERS_LOCK = threading.Lock()
 _ACTIVE_WORKERS: List[dict] = []
 
 _HAZARD_LOCK = threading.Lock()
+
+def _make_default_camera_hazards():
+    return {
+        cid: {
+            "camera_id": cid,
+            "fire": False,
+            "smoke": False,
+            "fire_confidence": 0.0,
+            "smoke_confidence": 0.0,
+            "fire_boxes": [],
+            "smoke_boxes": [],
+            "status": "DISCONNECTED",
+            "last_updated": 0.0,
+        }
+        for cid in ("CCTV_01", "CCTV_02", "CCTV_03", "CCTV_04")
+    }
+
+_MANUAL_HAZARD_OVERRIDE = {
+    "smoke": False,
+    "fire": False,
+    "smoke_index": 0.0,
+}
+
 _HAZARD_STATE: Dict[str, any] = {
     "smoke": False,
     "smoke_index": 0.0,
     "fire": False,
     "last_updated": 0.0,
+    "cameras": _make_default_camera_hazards(),
+    "active_camera_id": None,
+    "active_hazard_type": "NONE",
 }
+
+def _sync_aggregate_hazard_unlocked():
+    any_fire = False
+    any_smoke = False
+    max_smoke_conf = 0.0
+    active_cam = None
+    hazard_types = set()
+
+    for cid, cstate in _HAZARD_STATE.get("cameras", {}).items():
+        if cstate.get("fire"):
+            any_fire = True
+            if not active_cam:
+                active_cam = cid
+            hazard_types.add("FIRE")
+        if cstate.get("smoke"):
+            any_smoke = True
+            if not active_cam:
+                active_cam = cid
+            hazard_types.add("SMOKE")
+            max_smoke_conf = max(max_smoke_conf, float(cstate.get("smoke_confidence", 0.0)))
+
+    if _MANUAL_HAZARD_OVERRIDE.get("fire"):
+        any_fire = True
+        hazard_types.add("FIRE")
+        if not active_cam:
+            active_cam = "MANUAL_SIM"
+    if _MANUAL_HAZARD_OVERRIDE.get("smoke"):
+        any_smoke = True
+        hazard_types.add("SMOKE")
+        max_smoke_conf = max(max_smoke_conf, float(_MANUAL_HAZARD_OVERRIDE.get("smoke_index", 0.88)))
+        if not active_cam:
+            active_cam = "MANUAL_SIM"
+
+    _HAZARD_STATE["fire"] = any_fire
+    _HAZARD_STATE["smoke"] = any_smoke
+    _HAZARD_STATE["smoke_index"] = max_smoke_conf if any_smoke else 0.0
+    _HAZARD_STATE["active_camera_id"] = active_cam
+    if "FIRE" in hazard_types and "SMOKE" in hazard_types:
+        _HAZARD_STATE["active_hazard_type"] = "BOTH"
+    elif "FIRE" in hazard_types:
+        _HAZARD_STATE["active_hazard_type"] = "FIRE"
+    elif "SMOKE" in hazard_types:
+        _HAZARD_STATE["active_hazard_type"] = "SMOKE"
+    else:
+        _HAZARD_STATE["active_hazard_type"] = "NONE"
+    _HAZARD_STATE["last_updated"] = time.time()
 
 def get_hazard_state() -> dict:
     with _HAZARD_LOCK:
-        return dict(_HAZARD_STATE)
+        return json.loads(json.dumps(_HAZARD_STATE))
 
-def set_hazard_state(smoke: Optional[bool] = None, fire: Optional[bool] = None, smoke_index: Optional[float] = None):
+def update_camera_hazard(
+    camera_id: str,
+    fire: bool = False,
+    smoke: bool = False,
+    fire_confidence: float = 0.0,
+    smoke_confidence: float = 0.0,
+    fire_boxes: Optional[List[dict]] = None,
+    smoke_boxes: Optional[List[dict]] = None,
+    status: str = "ONLINE"
+):
+    """Safely updates real-time hazard detection telemetry for a specific CCTV camera channel."""
     with _HAZARD_LOCK:
-        if smoke is not None:
-            _HAZARD_STATE["smoke"] = smoke
-            if smoke and smoke_index is not None:
-                _HAZARD_STATE["smoke_index"] = smoke_index
-            elif not smoke:
-                _HAZARD_STATE["smoke_index"] = 0.0
-        if fire is not None:
-            _HAZARD_STATE["fire"] = fire
-        _HAZARD_STATE["last_updated"] = time.time()
+        cam_id = camera_id.upper().strip()
+        if "cameras" not in _HAZARD_STATE:
+            _HAZARD_STATE["cameras"] = _make_default_camera_hazards()
+        _HAZARD_STATE["cameras"][cam_id] = {
+            "camera_id": cam_id,
+            "fire": bool(fire),
+            "smoke": bool(smoke),
+            "fire_confidence": float(round(fire_confidence, 2)),
+            "smoke_confidence": float(round(smoke_confidence, 2)),
+            "fire_boxes": fire_boxes or [],
+            "smoke_boxes": smoke_boxes or [],
+            "status": status,
+            "last_updated": time.time(),
+        }
+        _sync_aggregate_hazard_unlocked()
+
+def set_hazard_state(
+    smoke: Optional[bool] = None,
+    fire: Optional[bool] = None,
+    smoke_index: Optional[float] = None,
+    camera_id: Optional[str] = None
+):
+    """Updates hazard state while maintaining 100% backward compatibility for simulation and callers."""
+    with _HAZARD_LOCK:
+        if camera_id:
+            cam_id = camera_id.upper().strip()
+            cam_entry = _HAZARD_STATE.get("cameras", {}).get(cam_id, {
+                "camera_id": cam_id,
+                "fire": False,
+                "smoke": False,
+                "fire_confidence": 0.0,
+                "smoke_confidence": 0.0,
+                "fire_boxes": [],
+                "smoke_boxes": [],
+                "status": "ONLINE",
+                "last_updated": time.time(),
+            })
+            if fire is not None:
+                cam_entry["fire"] = bool(fire)
+                cam_entry["fire_confidence"] = 0.95 if fire else 0.0
+            if smoke is not None:
+                cam_entry["smoke"] = bool(smoke)
+                cam_entry["smoke_confidence"] = float(smoke_index or (0.88 if smoke else 0.0))
+            cam_entry["last_updated"] = time.time()
+            _HAZARD_STATE["cameras"][cam_id] = cam_entry
+        else:
+            if smoke is not None:
+                _MANUAL_HAZARD_OVERRIDE["smoke"] = bool(smoke)
+                _MANUAL_HAZARD_OVERRIDE["smoke_index"] = float(smoke_index or (0.88 if smoke else 0.0))
+            if fire is not None:
+                _MANUAL_HAZARD_OVERRIDE["fire"] = bool(fire)
+        _sync_aggregate_hazard_unlocked()
 
 _STANDBY_CACHE: Dict[str, bytes] = {}
 _CAMERA_SOURCE_CALLBACK = None
@@ -364,17 +489,43 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
                 payload = json.loads(post_data.decode("utf-8")) if post_data else {}
                 with _HAZARD_LOCK:
                     if "reset" in path or "clear" in path or payload.get("reset"):
-                        _HAZARD_STATE["smoke"] = False
-                        _HAZARD_STATE["smoke_index"] = 0.0
-                        _HAZARD_STATE["fire"] = False
+                        _MANUAL_HAZARD_OVERRIDE["smoke"] = False
+                        _MANUAL_HAZARD_OVERRIDE["smoke_index"] = 0.0
+                        _MANUAL_HAZARD_OVERRIDE["fire"] = False
+                        for cid in _HAZARD_STATE.get("cameras", {}):
+                            _HAZARD_STATE["cameras"][cid]["fire"] = False
+                            _HAZARD_STATE["cameras"][cid]["smoke"] = False
+                            _HAZARD_STATE["cameras"][cid]["fire_confidence"] = 0.0
+                            _HAZARD_STATE["cameras"][cid]["smoke_confidence"] = 0.0
+                            _HAZARD_STATE["cameras"][cid]["fire_boxes"] = []
+                            _HAZARD_STATE["cameras"][cid]["smoke_boxes"] = []
                     elif "smoke" in path:
                         active = payload.get("smoke") if "smoke" in payload else payload.get("active", True)
-                        _HAZARD_STATE["smoke"] = bool(active)
-                        _HAZARD_STATE["smoke_index"] = float(payload.get("smoke_index", 0.88 if active else 0.0))
+                        s_idx = float(payload.get("smoke_index", 0.88 if active else 0.0))
+                        target_cam = payload.get("camera_id") or payload.get("camera")
+                        if target_cam:
+                            cid = target_cam.upper().strip()
+                            if cid not in _HAZARD_STATE["cameras"]:
+                                cid = "CCTV_0" + cid[-1] if cid[-1].isdigit() else cid
+                            if cid in _HAZARD_STATE["cameras"]:
+                                _HAZARD_STATE["cameras"][cid]["smoke"] = bool(active)
+                                _HAZARD_STATE["cameras"][cid]["smoke_confidence"] = s_idx if active else 0.0
+                        else:
+                            _MANUAL_HAZARD_OVERRIDE["smoke"] = bool(active)
+                            _MANUAL_HAZARD_OVERRIDE["smoke_index"] = s_idx
                     elif "fire" in path:
                         active = payload.get("fire") if "fire" in payload else payload.get("active", True)
-                        _HAZARD_STATE["fire"] = bool(active)
-                    _HAZARD_STATE["last_updated"] = time.time()
+                        target_cam = payload.get("camera_id") or payload.get("camera")
+                        if target_cam:
+                            cid = target_cam.upper().strip()
+                            if cid not in _HAZARD_STATE["cameras"]:
+                                cid = "CCTV_0" + cid[-1] if cid[-1].isdigit() else cid
+                            if cid in _HAZARD_STATE["cameras"]:
+                                _HAZARD_STATE["cameras"][cid]["fire"] = bool(active)
+                                _HAZARD_STATE["cameras"][cid]["fire_confidence"] = 0.95 if active else 0.0
+                        else:
+                            _MANUAL_HAZARD_OVERRIDE["fire"] = bool(active)
+                    _sync_aggregate_hazard_unlocked()
                     resp = json.dumps({"status": "SUCCESS", "hazard_state": _HAZARD_STATE}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

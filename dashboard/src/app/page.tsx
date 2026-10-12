@@ -251,6 +251,8 @@ export default function FacilityDashboardPage() {
               camera={cctv1}
               workers={workerTracks}
               zoneName="Facility Gate Choke-Point"
+              hasFireHazard={liveHazard?.cameras?.["CCTV_01"]?.fire || false}
+              hasSmokeHazard={liveHazard?.cameras?.["CCTV_01"]?.smoke || false}
               onConnectIp={(cam) => {
                 setModalCameraId(cam.camera_id);
                 setIsConnectModalOpen(true);
@@ -262,8 +264,8 @@ export default function FacilityDashboardPage() {
               camera={cctv2}
               workers={workerTracks}
               zoneName="Production Bay (Front View)"
-              hasFireHazard={liveHazard?.fire || zones.find((z) => z.zone_id === cctv2.zone_id)?.fire_detected}
-              hasSmokeHazard={liveHazard?.smoke || zones.find((z) => z.zone_id === cctv2.zone_id)?.smoke_detected}
+              hasFireHazard={liveHazard?.cameras?.["CCTV_02"] ? liveHazard.cameras["CCTV_02"].fire : (liveHazard?.fire || zones.find((z) => z.zone_id === cctv2.zone_id)?.fire_detected)}
+              hasSmokeHazard={liveHazard?.cameras?.["CCTV_02"] ? liveHazard.cameras["CCTV_02"].smoke : (liveHazard?.smoke || zones.find((z) => z.zone_id === cctv2.zone_id)?.smoke_detected)}
               onConnectIp={(cam) => {
                 setModalCameraId(cam.camera_id);
                 setIsConnectModalOpen(true);

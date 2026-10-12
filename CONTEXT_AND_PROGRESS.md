@@ -50,6 +50,12 @@
   - Temporal confirmation buffer (5 consecutive frames before raising persistent incidents).
   - Direct Cloud Firestore synchronization via REST API & Admin SDK fallback.
   - Interactive tactical HUD with live webcam feed, synthetic industrial fallback, and keyboard simulation triggers (`H`, `V`, `F`, `S`, `Q`).
+- [x] **Multi-Camera Fire & Smoke Detection Pipeline (`vision_pipeline/models/fire_smoke_yolov8n.pt`):**
+  - Real-time YOLO inference integrated across all 4 cameras (CCTV 1–4) via round-robin scheduler.
+  - Camera-specific reporting (`CCTV_01`, `CCTV_02`, `CCTV_03`, `CCTV_04`) with separate FIRE (P3) and SMOKE (P2) classifications.
+  - Consecutive-evaluation debouncing (>= 2 frames) and 60-second Firestore incident cooldown.
+  - Automatic stale-detection clearance upon stream disconnection or stall.
+  - 100% backward-compatible HTTP telemetry (`/api/hazard`) and manual simulation preservation.
 
 ### In Progress / Pending:
 - [x] Connect Firebase SDK initialization (`lib/firebase.ts`) with live project credentials (`ps06-safety-gear`).
@@ -1275,14 +1281,59 @@
   - Modified: [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
   - Created: [`vision_pipeline/scratch/test_all_three_fixes.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_all_three_fixes.py), [`vision_pipeline/scratch/test_vest_gloves.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_vest_gloves.py)
 
+### Session: 2026-10-12 (Session 21)
+- **Agent Focus:** Fire and Smoke Detection Integration with Camera-Specific Reporting across CCTV 1–4.
+- **Empirical Diagnostics & Model Verification:**
+  - Verified neural model `vision_pipeline/models/fire_smoke_yolov8n.pt` (6.2 MB):
+    - Confirmed model classes dynamically via Ultralytics YOLO: `{0: 'smoke', 1: 'fire'}` (`task: detect`).
+    - Benchmarked CPU inference latency: ~18–24ms warm latency on CPU with downscaled frame (`480x270`, `imgsz=384`).
+- **Architectural Decisions & Implementation:**
+  1. **Throttled Round-Robin Evaluation Pipeline (`multicam_orchestrator.py`):**
+     - Safely loaded `fire_smoke_yolov8n.pt` once during startup.
+     - Scheduled round-robin inference across active cameras (`CCTV_01`, `CCTV_02`, `CCTV_03`, `CCTV_04`) on ~80ms ticks (~12.5 Hz). Each active camera is evaluated ~3 times/sec, consuming <15% single-core CPU while video streaming remains at ~25 FPS.
+  2. **Confidence Filtering & Consecutive Debounce:**
+     - Fire confidence threshold: `conf >= 0.45` (tuned to avoid false alarms from welding sparks).
+     - Smoke confidence threshold: `conf >= 0.38`.
+     - Consecutive-evaluation debounce: Requires 2 consecutive positive evaluations (~500ms sustained) before declaring confirmed fire or smoke. Rejects 1-frame transient spikes.
+  3. **Event Lifecycle & Firestore Deduplication:**
+     - Cooldown timer of 60 seconds per camera (`last_fire_incident_time[cam_id]`, `last_smoke_incident_time[cam_id]`). Continuous frames of the same event do not create duplicate Firestore records.
+     - Creates camera-specific Firestore incident documents (`FIR-CCTV_01-...`, `SMK-CCTV_02-...`) with priority escalation (`P3` for Fire, `P2` for Smoke) and updates zone priorities.
+     - When hazard subsides, zone priority resets to normal (`P0`).
+  4. **Stale Detection Expiration:**
+     - Disconnected or stalled camera feeds immediately clear hazard flags, resetting status to `DISCONNECTED` with 0 stale detections.
+  5. **100% Backward-Compatible Telemetry Schema (`web_streamer.py`):**
+     - Maintained top-level legacy fields: `smoke: bool`, `fire: bool`, `smoke_index: float`, `last_updated: float`.
+     - Added rich per-camera dictionary under `cameras` (`CCTV_01` through `CCTV_04`) containing `fire`, `smoke`, `fire_confidence`, `smoke_confidence`, `fire_boxes`, `smoke_boxes`, and `status`.
+     - Added top-level `active_camera_id` and `active_hazard_type` (`"FIRE"`, `"SMOKE"`, `"BOTH"`, `"NONE"`).
+     - Preserved manual simulation endpoints and keyboard shortcuts ('s' and 'f').
+  6. **Camera-Specific Dashboard Binding:**
+     - Updated `SafetyContext.tsx` with typed `CameraHazardInfo` and `LiveHazardState`.
+     - In `dashboard/src/app/cameras/page.tsx` and `dashboard/src/app/page.tsx`, passed camera-specific `hasFireHazard` and `hasSmokeHazard` props to `CameraViewer`.
+- **Verification & Test Results:**
+  - Automated test suite `vision_pipeline/scratch/test_fire_smoke_cameras.py` passed all 6 tests:
+    - Test 1 (Model Loading & Class Mapping): 0=smoke, 1=fire verified.
+    - Test 2 (Web Streamer Schema): Backward compatible + rich camera fields verified.
+    - Test 3 (Debounce & Consecutive Evaluation): 1-frame spikes rejected, 2nd consecutive frame confirmed.
+    - Test 4 (Separate Hazards & Independent Cameras): CCTV 1 smoke and CCTV 4 fire strictly isolated.
+    - Test 5 (Stale Detection & Disconnection Expiration): Disconnected streams immediately clear hazard flags.
+    - Test 6 (Incident Deduplication & Cooldown): Prevented duplicate continuous frame spamming.
+  - Regression test suite `test_all_three_fixes.py`: 100% PASS (Zero regressions on worker tracking & PPE).
+  - Regression test suite `test_helmet_logic.py`: 100% PASS (Bare head, helmet aside, helmet on).
+  - TypeScript compilation: `npx tsc --noEmit` exited with 0 errors.
+  - Live endpoints verified on port 5000: `/health` (ONLINE), `/api/hazard` (rich camera telemetry active), `/snapshot/cctv1-4` (200 OK).
+- **Files Modified:**
+  - Modified: [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`dashboard/src/app/cameras/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/cameras/page.tsx), [`dashboard/src/app/page.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/app/page.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+  - Created: [`vision_pipeline/scratch/test_fire_smoke_cameras.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_fire_smoke_cameras.py)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Physical Multi-Phone Live Feed Verification:**
-   - With live phones connected to CCTV 2, 3, and 4 on the local network (`http://<ip>:8080/video`), observe dynamic worker tracking and helmet/vest detection across multiple camera angles.
-2. **Zone Environmental RTU Bring-Up:**
-   - Ingest physical ESP32 Modbus RTU telemetry for zone environmental sensors (flame, smoke, temperature).
+1. **Physical Fire/Flame Testing in Field:**
+   - Test physical lighter, candle, or controlled flame source in front of live CCTV 1 (webcam) and observe `P3 TAKEOVER` triggering exclusively on CCTV 1.
+2. **Multi-Phone Live Feed Bring-Up:**
+   - With physical phones connected on the local network (`http://<ip>:8080/video`) for CCTV 2, 3, and 4, verify simultaneous PPE compliance and fire/smoke monitoring across all 4 cameras.
+
 
 
 
