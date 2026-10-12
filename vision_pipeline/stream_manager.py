@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 import numpy as np
 from typing import Tuple, Optional, Union
 
-# Set FFmpeg network timeout to 2.5s to prevent OpenCV from hanging on unreachable camera IPs
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2500000"
+# Set FFmpeg network timeout and low-latency flags to prevent buffer accumulation on IP cameras
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rw_timeout;2000000|fflags;nobuffer|flags;low_delay"
 
 def is_host_reachable(url: str, timeout: float = 0.4) -> bool:
     """Pre-checks network reachability of IP camera endpoint to prevent FFmpeg crashes."""
@@ -177,6 +177,9 @@ class ThreadedCameraStream:
             try:
                 ret, frame = self.cap.read()
                 if ret and frame is not None:
+                    # If frame exceeds 1280 wide (e.g. 1080p mobile camera), downscale immediately to slash GIL/memory load
+                    if frame.shape[1] > 1280:
+                        frame = cv2.resize(frame, (1280, 720))
                     with self.lock:
                         self.latest_frame = frame
                         self.latest_timestamp = now
@@ -194,12 +197,12 @@ class ThreadedCameraStream:
                 self.is_synthetic_mode = True
                 last_reconnect_attempt = now
 
-    def get_latest_frame(self) -> Tuple[Optional[np.ndarray], float]:
+    def get_latest_frame(self, copy: bool = False) -> Tuple[Optional[np.ndarray], float]:
         """Returns the most recent frame and capture timestamp without blocking."""
         with self.lock:
             if self.latest_frame is None:
                 return None, 0.0
-            return self.latest_frame.copy(), self.latest_timestamp
+            return (self.latest_frame.copy() if copy else self.latest_frame), self.latest_timestamp
 
     def get_latency(self) -> float:
         """Returns time in seconds since the latest frame was ingested."""

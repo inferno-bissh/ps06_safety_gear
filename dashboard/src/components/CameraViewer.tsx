@@ -142,8 +142,17 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     if (!useSnapshotMode || showFallbackSim || streamError) return;
     const interval = setInterval(() => {
       setSnapshotTimestamp(Date.now());
-    }, 80);
-    return () => clearInterval(interval);
+    }, 200);
+
+    // Auto-recovery: attempt switching back to real-time MJPEG feed after brief network hiccups
+    const recoveryTimeout = setTimeout(() => {
+      setUseSnapshotMode(false);
+    }, 3500);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(recoveryTimeout);
+    };
   }, [useSnapshotMode, showFallbackSim, streamError]);
 
   const defaultStreamEndpoint = useMemo(() => {

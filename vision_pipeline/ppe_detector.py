@@ -148,21 +148,31 @@ class WorkerPPEEvaluator:
                     continue
 
                 # Helmet: MUST be strictly positioned at the anatomical cranial apex (on the head, above brow)
-                # A helmet set aside on a desk, table, lap, or held at waist/chest height is NOT on the worker's head!
+                # A helmet set aside on a desk, in the background, or held elsewhere is NOT on this worker's head!
                 if "helmet" in lbl:
                     is_on_head = False
+                    iw = ix2 - ix1
+                    ih = iy2 - iy1
                     if face_bbox is not None:
-                        # Face detected: Helmet must sit directly over the face horizontally,
-                        # top must be above brow, bottom must not reach below mid-forehead, and center above eyes
+                        # Face detected:
+                        # 1. Scale consistency: helmet width/height must match face scale (rejects small background helmets)
+                        scale_ok = (0.50 * fw <= iw <= 1.85 * fw) and (0.35 * fh <= ih <= 1.60 * fh)
+                        # 2. Horizontal alignment: helmet must sit directly over the face horizontally
                         face_horiz = (fx - int(fw * 0.25) <= icx <= fx + fw + int(fw * 0.25))
-                        face_vert = (iy1 < fy and iy2 <= fy + int(fh * 0.45) and icy < fy + int(fh * 0.25))
-                        if face_horiz and face_vert:
+                        # 3. Vertical position: helmet bottom iy2 MUST rest near brow/upper face
+                        # (cannot be floating far above head on a shelf or on someone standing behind)
+                        face_vert = (iy1 < fy and (fy - int(fh * 0.20) <= iy2 <= fy + int(fh * 0.45)) and icy < fy + int(fh * 0.20))
+                        if face_horiz and scale_ok and face_vert:
                             is_on_head = True
                     else:
-                        # No face detected: Helmet center must be strictly in the upper 22% apex of person box
+                        # No face detected:
+                        # 1. Scale consistency: helmet width must match person upper body
+                        scale_ok = (0.18 * box_w <= iw <= 0.70 * box_w) and (ih >= 20)
+                        # 2. Horizontal alignment with worker center
                         apex_horiz = (x1 + int(box_w * 0.15) <= icx <= x2 - int(box_w * 0.15))
-                        apex_vert = (y1 - max(60, int(box_h * 0.25)) <= icy <= y1 + int(box_h * 0.22) and iy2 <= y1 + int(box_h * 0.35))
-                        if apex_horiz and apex_vert:
+                        # 3. Vertical position: must sit right at cranial apex, not floating high above
+                        apex_vert = (y1 - max(40, int(box_h * 0.15)) <= icy <= y1 + int(box_h * 0.22) and (y1 <= iy2 <= y1 + int(box_h * 0.35)))
+                        if apex_horiz and scale_ok and apex_vert:
                             is_on_head = True
 
                     if is_on_head:
@@ -306,7 +316,7 @@ class WorkerPPEEvaluator:
             helmet_source = "NONE"
             helmet_color = helmet_hsv_color
         elif helmet_hsv_pass:
-            if helmet_hsv_color == "WHITE" and not helmet_neural and white_pct < 0.35:
+            if helmet_hsv_color == "WHITE" and not helmet_neural:
                 # White background wall/ceiling without neural helmet confirmation is rejected
                 helmet_pass = False
                 helmet_source = "NONE"
@@ -319,8 +329,9 @@ class WorkerPPEEvaluator:
                     crown_roi = helmet_neural_box
         elif (
             helmet_neural
-            and helmet_neural_conf >= HELMET_CONF_THRESHOLD
+            and helmet_neural_conf >= 0.25
             and not is_bare_head
+            and helmet_hsv_color not in ["PAPER_BAG"]
         ):
             # Neural YOLO confirms helmet when bare hair is NOT detected on skull
             helmet_pass = True
@@ -440,10 +451,10 @@ class WorkerPPEEvaluator:
 
         state = self.worker_tracks[track_id]
 
-        if not is_compliant:
+        if not is_compliant or not helmet_pass:
             state["consecutive_fail"] += 1
         else:
-            state["consecutive_fail"] = max(0, state["consecutive_fail"] - 1)
+            state["consecutive_fail"] = 0
 
         should_raise_incident = False
         now = time.time()
@@ -573,10 +584,12 @@ class WorkerPPEEvaluator:
         lap_var = float(cv2.Laplacian(crown_gray, cv2.CV_64F).var())
 
         # 1. Hair Segmentation in Skull Zone:
-        # Human hair is dark (V < 92) and low-to-moderate saturation, or dark brown
-        m_hair1 = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 110, 92]))
-        m_hair2 = cv2.inRange(crown_hsv, np.array([5, 40, 30]), np.array([25, 140, 110]))
-        m_hair = cv2.bitwise_or(m_hair1, m_hair2)
+        # Human hair: dark/black (V < 95), brown/chestnut (H: 5-28, S: 35-145, V: 25-130),
+        # or hair illuminated by ambient room/webcam lighting (low saturation S < 80, V < 140)
+        m_hair1 = cv2.inRange(crown_hsv, np.array([0, 0, 0]), np.array([180, 115, 95]))
+        m_hair2 = cv2.inRange(crown_hsv, np.array([5, 30, 25]), np.array([28, 145, 130]))
+        m_hair3 = cv2.inRange(crown_hsv, np.array([0, 0, 40]), np.array([180, 80, 140]))
+        m_hair = cv2.bitwise_or(cv2.bitwise_or(m_hair1, m_hair2), m_hair3)
         hair_ratio = cv2.countNonZero(m_hair) / crown_pixels
 
         # 2. Forehead Skin Segmentation:
@@ -647,21 +660,22 @@ class WorkerPPEEvaluator:
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
 
         # 6. Authentic White Hardhat:
-        # Requires at least 25% solid white plastic coverage, low hair (<20%), and white exceeding hair
-        if best_color == "WHITE" and white_ratio >= 0.25 and hair_ratio < 0.20 and white_ratio > hair_ratio:
+        # A white wall is NOT a helmet! A white helmet requires high density (>= 40%),
+        # low hair (< 10%), low skin (< 12%), and white overwhelmingly exceeding hair (> 2.5x)
+        if best_color == "WHITE" and white_ratio >= 0.40 and hair_ratio < 0.10 and skin_ratio < 0.12 and white_ratio > 2.5 * hair_ratio:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
 
         # 7. Explicit Bare Hair Rejection:
-        # If dark/brown hair covers 18%+ of skull dome, it is unequivocally bare hair!
-        if hair_ratio >= 0.18:
+        # If dark/brown/lit hair covers 14%+ of skull dome, it is unequivocally bare hair!
+        if hair_ratio >= 0.14:
             return False, "BARE_HAIR", white_ratio, colored_ratio, crown_roi_global
 
         # 8. Explicit Bare Forehead/Skin Rejection:
-        if skin_ratio >= 0.28 and best_ratio < 0.15:
+        if skin_ratio >= 0.22 and best_ratio < 0.18:
             return False, "BARE_SKIN", white_ratio, colored_ratio, crown_roi_global
 
         # 9. Natural Hair Fiber Texture Rejection:
-        if lap_var >= 200 and hair_ratio >= 0.14 and best_ratio < 0.15:
+        if lap_var >= 180 and hair_ratio >= 0.10 and best_ratio < 0.18:
             return False, "HAIR_TEXTURE", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global

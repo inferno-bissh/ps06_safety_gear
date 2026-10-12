@@ -163,6 +163,8 @@ class MultiCameraOrchestrator:
         self.cached_gate_drawings = []
         self.last_smoke_incident_time: float = 0.0
         self.last_fire_incident_time: float = 0.0
+        self.last_cctv3_ts: float = 0.0
+        self.last_cctv4_ts: float = 0.0
         self.smoke_active_prev: bool = False
         self.fire_active_prev: bool = False
 
@@ -1094,15 +1096,17 @@ class MultiCameraOrchestrator:
 
                     self.web_broadcaster.update_frame("composite", display_view)
                     if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
-                        f3, _ = self.cctv3_stream.get_latest_frame()
-                        if f3 is not None:
+                        f3, ts3 = self.cctv3_stream.get_latest_frame(copy=False)
+                        if f3 is not None and ts3 > self.last_cctv3_ts:
+                            self.last_cctv3_ts = ts3
                             self.web_broadcaster.update_frame("cctv3", cv2.resize(f3, (w_sub, h_sub)))
                     else:
                         self.web_broadcaster.clear_frame("cctv3")
 
                     if self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode:
-                        f4, _ = self.cctv4_stream.get_latest_frame()
-                        if f4 is not None:
+                        f4, ts4 = self.cctv4_stream.get_latest_frame(copy=False)
+                        if f4 is not None and ts4 > self.last_cctv4_ts:
+                            self.last_cctv4_ts = ts4
                             self.web_broadcaster.update_frame("cctv4", cv2.resize(f4, (w_sub, h_sub)))
                     else:
                         self.web_broadcaster.clear_frame("cctv4")

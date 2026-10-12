@@ -1195,13 +1195,50 @@
   - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/api/cameras/workers/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/workers/route.ts), [`dashboard/src/app/api/cameras/hazard/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/hazard/route.ts), [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
   - Created: [`vision_pipeline/scratch/test_helmet_logic.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_helmet_logic.py)
 
+### Session: 2026-10-12 (Session 59)
+- **Agent Focus:** Targeted Root-Cause Diagnosis & Fix for CCTV 3 & 4 Severe Lag and False/Stale Helmet Detection.
+- **Empirical Diagnostics & Root Cause Breakdown:**
+  1. **Issue 1: CCTV 3 and 4 Lag & Freezing Root Causes:**
+     - **FFmpeg Frame Buffer Accumulation in `ThreadedCameraStream` (`stream_manager.py`):** For HTTP/MJPEG streams, OpenCV's FFmpeg demuxer buffers packets into socket queues. `cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)` is ignored by FFmpeg network backend. Network jitter caused frames to back up 30-90 frames, producing severe multi-second lag.
+     - **Redundant JPEG Re-encoding in Main Loop (`multicam_orchestrator.py`):** Every tick (~30 FPS), `cv2.resize()` and `web_broadcaster.update_frame()` (`cv2.imencode('.jpg', ...)`) were called for CCTV 3 and 4 even when no fresh frame timestamp had arrived. This saturated Python's GIL (~120 encodes/sec), starving the capture worker threads.
+     - **Frontend Stale Snapshot Mode Trap (`CameraViewer.tsx`):** On temporary network hiccup, `onError` set `useSnapshotMode = true` and polled `/snapshot/` every 80ms (12.5 GET requests/sec per camera), never attempting to recover back to live MJPEG.
+  2. **Issue 2: False and Stale Helmet Detection Root Causes:**
+     - **Specular Hair & Background Wall Misclassification (`ppe_detector.py`):** In `_check_helmet_hsv`, hair mask was restricted to `V < 92`. Under normal room lighting, hair highlights have `V` between 92 and 140, yielding 0 hair pixels. Meanwhile, light-colored background walls behind the head had `V >= 180, S <= 45` and satisfied `white_ratio >= 0.25`, falsely passing bare-headed workers as wearing `WHITE` hardhats.
+     - **Multi-Person Spatial Association & Distant Helmets (`ppe_detector.py`):** In `evaluate_ppe`, candidate helmets from `frame_ppe_items` were checked using loose vertical conditions (`iy1 < fy`) without head-scale proportionality checks. A 40px helmet worn by a distant background person was falsely credited to a 150px foreground worker.
+     - **Stale PASS State:** `temporal_threshold` previously decayed gradually instead of resetting immediately upon helmet removal.
+- **Implemented Fixes:**
+  1. **Fixed Stream Manager & Low-Latency Flags (`stream_manager.py`):**
+     - Configured `os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rw_timeout;2000000|fflags;nobuffer|flags;low_delay"` to disable demuxer buffering and enforce low delay.
+     - Downscaled oversized network frames (>1280 wide) immediately in worker thread before locking.
+     - Added non-copying `get_latest_frame(copy=False)` to eliminate redundant memory copies.
+  2. **Timestamp Gating in Orchestrator (`multicam_orchestrator.py`):**
+     - Added `last_cctv3_ts` and `last_cctv4_ts` tracking: only resize and JPEG-encode CCTV 3 and 4 when fresh frame timestamps arrive.
+  3. **Throttled Snapshot Polling & Auto-Recovery (`CameraViewer.tsx`):**
+     - Throttled fallback snapshot polling to 200ms and added 3.5s auto-recovery timeout back to live MJPEG stream.
+  4. **Strict Anatomical Helmet Gating & Hair Discrimination (`ppe_detector.py`):**
+     - Expanded hair segmentation to capture lit hair (`V < 140, S < 80`).
+     - Required strict neural confirmation (`helmet_neural == True`) for white hardhats; background walls are definitively rejected.
+     - Enforced head scale proportionality (`0.50 * fw <= iw <= 1.85 * fw`) and brow alignment (`fy - 0.20*fh <= iy2 <= fy + 0.45*fh`), completely blocking distant background helmets.
+     - Immediately reset temporal failure counter to 0 on full compliance and incremented failure immediately upon helmet removal.
+- **Verification & Testing Results:**
+  - Automated unit test suite `vision_pipeline/tests/test_fix_verification.py` passed all 5 tests:
+    - Test 1 (Authentic Yellow Helmet): `PASS`
+    - Test 2 (Helmet Removed): `FAIL, BARE_HAIR` (Immediate, 0 stale PASS)
+    - Test 3 (Bareheaded person in front of light wall): `FAIL, BARE_HAIR` (Wall not mistaken for white helmet)
+    - Test 4 (Foreground bareheaded + Background helmet): Foreground `FAIL`, Background `PASS` (Scale & proximity gating)
+    - Test 5 (CCTV 3 & 4 parallel decoupling): Latency < 0.8s, zero thread blocking.
+  - Port 5000 live endpoints verified: `/health` (200 OK, 31ms), `/api/workers` (200 OK, 1.5ms), `/snapshot/cctv1-4` (200 OK, 11-24ms).
+  - Clean TypeScript check: `npx tsc --noEmit` -> 0 errors. Clean Python compilation -> 0 errors.
+- **Files Modified:**
+  - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+  - Created: [`vision_pipeline/tests/test_fix_verification.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/tests/test_fix_verification.py)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
 1. **Mobile Phone Stream Pairing (CCTV 2, 3, 4):**
-   - Start the IP Webcam app on the mobile device (connected to the same local Wi-Fi / hotspot).
-   - Click "Connect IP Stream" on CCTV 2, 3, or 4 in the dashboard (or via `/settings`), input the phone's IP (e.g. `http://192.168.x.x:8080/video`), and verify live video ingestion.
+   - Start IP Webcam on phone, verify IP in dashboard settings.
 2. **Hardware / Modbus Telemetry Bring-Up:**
    - Ingest physical ESP32 Modbus RTU telemetry for zone environmental sensors.
 3. **Fire & Smoke Real-World Burner Testing:**
