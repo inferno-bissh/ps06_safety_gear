@@ -1243,30 +1243,30 @@ class MultiCameraOrchestrator:
                     "confidence": float(round(conf, 2)),
                 }
 
-                # Evaluate FIRE (Class 1 or 'fire'): Threshold >= 0.45
-                if (cls_id == 1 or "fire" in cls_name) and conf >= 0.45:
+                # Evaluate FIRE (Class 1 or 'fire'): Threshold >= 0.65
+                if (cls_id == 1 or "fire" in cls_name) and conf >= 0.65:
                     fire_detected_raw = True
                     if conf > fire_max_conf:
                         fire_max_conf = conf
                     fire_boxes.append(norm_box)
 
-                # Evaluate SMOKE (Class 0 or 'smoke'): Threshold >= 0.38
-                if (cls_id == 0 or "smoke" in cls_name) and conf >= 0.38:
+                # Evaluate SMOKE (Class 0 or 'smoke'): Threshold >= 0.65
+                if (cls_id == 0 or "smoke" in cls_name) and conf >= 0.65:
                     smoke_detected_raw = True
                     if conf > smoke_max_conf:
                         smoke_max_conf = conf
                     smoke_boxes.append(norm_box)
 
-        # 3. Consecutive-evaluation debounce to eliminate transient 1-frame spikes
+        # 3. Consecutive-evaluation debounce & hysteresis to eliminate transient spikes & flickering
         if fire_detected_raw:
-            self.fire_consecutive[cam_id] += 1
+            self.fire_consecutive[cam_id] = min(6, self.fire_consecutive[cam_id] + 1)
         else:
-            self.fire_consecutive[cam_id] = 0
+            self.fire_consecutive[cam_id] = max(0, self.fire_consecutive[cam_id] - 1)
 
         if smoke_detected_raw:
-            self.smoke_consecutive[cam_id] += 1
+            self.smoke_consecutive[cam_id] = min(6, self.smoke_consecutive[cam_id] + 1)
         else:
-            self.smoke_consecutive[cam_id] = 0
+            self.smoke_consecutive[cam_id] = max(0, self.smoke_consecutive[cam_id] - 1)
 
         confirmed_fire = self.fire_consecutive[cam_id] >= 2
         confirmed_smoke = self.smoke_consecutive[cam_id] >= 2
@@ -1279,7 +1279,8 @@ class MultiCameraOrchestrator:
 
         # 4. Fire Lifecycle & Firestore Deduplication (P3 Critical Takeover)
         if confirmed_fire:
-            if not prev_fire or (now - self.last_fire_incident_time[cam_id] > 60.0):
+            # Enforce 60-second cooldown per camera for continuous events
+            if (now - self.last_fire_incident_time[cam_id] > 60.0):
                 fire_inc = {
                     "incident_id": f"FIR-{cam_id}-{int(now) % 1000000:06d}",
                     "facility_id": self.facility_id,
@@ -1313,7 +1314,8 @@ class MultiCameraOrchestrator:
 
         # 5. Smoke Lifecycle & Firestore Deduplication (P2 Advisory)
         if confirmed_smoke:
-            if not prev_smoke or (now - self.last_smoke_incident_time[cam_id] > 60.0):
+            # Enforce 60-second cooldown per camera for continuous events
+            if (now - self.last_smoke_incident_time[cam_id] > 60.0):
                 smoke_inc = {
                     "incident_id": f"SMK-{cam_id}-{int(now) % 1000000:06d}",
                     "facility_id": self.facility_id,
