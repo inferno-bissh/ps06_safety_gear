@@ -1291,10 +1291,10 @@
   1. **Throttled Round-Robin Evaluation Pipeline (`multicam_orchestrator.py`):**
      - Safely loaded `fire_smoke_yolov8n.pt` once during startup.
      - Scheduled round-robin inference across active cameras (`CCTV_01`, `CCTV_02`, `CCTV_03`, `CCTV_04`) on ~80ms ticks (~12.5 Hz). Each active camera is evaluated ~3 times/sec, consuming <15% single-core CPU while video streaming remains at ~25 FPS.
-  2. **Confidence Filtering & Consecutive Debounce:**
-     - Fire confidence threshold: `conf >= 0.45` (tuned to avoid false alarms from welding sparks).
-     - Smoke confidence threshold: `conf >= 0.38`.
-     - Consecutive-evaluation debounce: Requires 2 consecutive positive evaluations (~500ms sustained) before declaring confirmed fire or smoke. Rejects 1-frame transient spikes.
+  2. **Confidence Filtering & Consecutive Debounce (Hysteresis):**
+     - Fire confidence threshold: `conf >= 0.65` (tuned to eliminate ambient noise and avoid false alarms from welding sparks).
+     - Smoke confidence threshold: `conf >= 0.65` (empirically tuned above room background noise ceiling of ~0.58).
+     - Consecutive-evaluation debounce & hysteresis: Increments on detection (+1, max 6), decrements on non-detection (-1, min 0). Requires 2 consecutive positive evaluations (~500ms sustained) before confirming fire or smoke, cleanly rejecting transient 1-frame spikes and flickering.
   3. **Event Lifecycle & Firestore Deduplication:**
      - Cooldown timer of 60 seconds per camera (`last_fire_incident_time[cam_id]`, `last_smoke_incident_time[cam_id]`). Continuous frames of the same event do not create duplicate Firestore records.
      - Creates camera-specific Firestore incident documents (`FIR-CCTV_01-...`, `SMK-CCTV_02-...`) with priority escalation (`P3` for Fire, `P2` for Smoke) and updates zone priorities.
