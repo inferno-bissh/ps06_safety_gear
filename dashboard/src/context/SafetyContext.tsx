@@ -479,24 +479,9 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (data.success && Array.isArray(data.workers)) {
             setIsVisionEngineOnline(true);
             setTelemetryError(false);
-            setWorkers((prev) => {
-              const liveMap = new Map<string, WorkerTrack>();
-              // Add live detected workers from live orchestrator
-              data.workers.forEach((w: WorkerTrack) => {
-                liveMap.set(w.worker_track_id, w);
-              });
-              // Retain demo/other camera workers (e.g. CCTV_03, CCTV_04) if not part of active live orchestrator channels
-              prev.forEach((oldW) => {
-                if (
-                  !liveMap.has(oldW.worker_track_id) &&
-                  oldW.camera_id !== "CCTV_01" &&
-                  oldW.camera_id !== "CCTV_02"
-                ) {
-                  liveMap.set(oldW.worker_track_id, oldW);
-                }
-              });
-              return Array.from(liveMap.values());
-            });
+            // Authoritative ground truth from live vision orchestrator:
+            // Sync live workers directly so stale/frozen mock detections on CCTV 3 or any other camera are not retained
+            setWorkers(data.workers);
           } else {
             setIsVisionEngineOnline(false);
           }

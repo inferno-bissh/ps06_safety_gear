@@ -181,37 +181,46 @@ class WorkerPPEEvaluator:
                             helmet_neural_conf = iconf
                             helmet_neural_box = (ix1, iy1, ix2, iy2)
 
-                # Vest: center within torso (12% to 90% of worker box)
+                # Vest: center within torso with scale consistency (rejects distant/unrelated items)
                 elif "vest" in lbl:
-                    if (y1 + int(box_h * 0.12)) <= icy <= (y1 + int(box_h * 0.90)):
-                        if iconf >= 0.32:
-                            vx1, vy1, vx2, vy2 = max(0, ix1), max(0, iy1), min(w, ix2), min(h, iy2)
-                            v_crop = frame[vy1:vy2, vx1:vx2]
-                            if v_crop.size > 0:
-                                v_ycrcb = cv2.cvtColor(v_crop, cv2.COLOR_BGR2YCrCb)
-                                v_skin = cv2.inRange(v_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
-                                v_skin_ratio = cv2.countNonZero(v_skin) / max(1, v_crop.shape[0] * v_crop.shape[1])
-                                # A genuine safety vest is not bare chest/skin!
-                                if v_skin_ratio < 0.35:
-                                    vest_neural = True
-                                    vest_neural_conf = max(vest_neural_conf, iconf)
+                    vw = ix2 - ix1
+                    vh = iy2 - iy1
+                    scale_ok = (0.30 * box_w <= vw <= 1.30 * box_w) and (0.18 * box_h <= vh <= 0.75 * box_h)
+                    horiz_ok = (x1 + int(box_w * 0.08) <= icx <= x2 - int(box_w * 0.08))
+                    vert_ok = (y1 + int(box_h * 0.15) <= icy <= y1 + int(box_h * 0.85))
+                    if scale_ok and horiz_ok and vert_ok and iconf >= 0.40:
+                        vx1, vy1, vx2, vy2 = max(0, ix1), max(0, iy1), min(w, ix2), min(h, iy2)
+                        v_crop = frame[vy1:vy2, vx1:vx2]
+                        if v_crop.size > 0:
+                            v_ycrcb = cv2.cvtColor(v_crop, cv2.COLOR_BGR2YCrCb)
+                            v_skin = cv2.inRange(v_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+                            v_skin_ratio = cv2.countNonZero(v_skin) / max(1, v_crop.shape[0] * v_crop.shape[1])
+                            # A genuine safety vest is not bare chest/skin!
+                            if v_skin_ratio < 0.28:
+                                vest_neural = True
+                                vest_neural_conf = max(vest_neural_conf, iconf)
 
-                # Gloves / Hands: anywhere from upper chest down to lower body
+                # Gloves / Hands: anatomically located in arm/hand regions with scale consistency
                 elif "glove" in lbl:
-                    if (y1 + int(box_h * 0.10)) <= icy <= (y2 + int(box_h * 0.20)):
-                        if iconf >= 0.20:
-                            gx1, gy1, gx2, gy2 = max(0, ix1), max(0, iy1), min(w, ix2), min(h, iy2)
-                            g_crop = frame[gy1:gy2, gx1:gx2]
-                            if g_crop.size > 0:
-                                g_hsv = cv2.cvtColor(g_crop, cv2.COLOR_BGR2HSV)
-                                mask_skin = cv2.inRange(g_hsv, np.array([0, 25, 40]), np.array([28, 180, 255]))
-                                skin_ratio = cv2.countNonZero(mask_skin) / max(1, (g_crop.shape[0] * g_crop.shape[1]))
-                                # Safety gloves must NOT be bare human skin!
-                                # If skin pixels exceed 18% of hand box, it is a bare hand/wrist: mark bare hands!
-                                if skin_ratio < 0.18:
-                                    gloves_neural = True
-                                else:
-                                    bare_hands_neural = True
+                    gw = ix2 - ix1
+                    gh = iy2 - iy1
+                    # Hand-sized scale consistency: reject torso-sized objects or furniture armrests
+                    scale_ok = (gw <= 0.42 * box_w) and (gh <= 0.38 * box_h) and (gw >= 12) and (gh >= 12)
+                    vert_ok = (y1 + int(box_h * 0.28) <= icy <= y2 + int(box_h * 0.10))
+                    horiz_ok = (x1 - max(15, int(box_w * 0.18)) <= icx <= x2 + max(15, int(box_w * 0.18)))
+                    if scale_ok and vert_ok and horiz_ok and iconf >= 0.38:
+                        gx1, gy1, gx2, gy2 = max(0, ix1), max(0, iy1), min(w, ix2), min(h, iy2)
+                        g_crop = frame[gy1:gy2, gx1:gx2]
+                        if g_crop.size > 0:
+                            g_hsv = cv2.cvtColor(g_crop, cv2.COLOR_BGR2HSV)
+                            mask_skin = cv2.inRange(g_hsv, np.array([0, 25, 40]), np.array([28, 180, 255]))
+                            skin_ratio = cv2.countNonZero(mask_skin) / max(1, (g_crop.shape[0] * g_crop.shape[1]))
+                            # Safety gloves must NOT be bare human skin!
+                            # If skin pixels exceed 18% of hand box, it is a bare hand/wrist: mark bare hands!
+                            if skin_ratio < 0.18:
+                                gloves_neural = True
+                            else:
+                                bare_hands_neural = True
 
                 # Goggles: near eyes/face (top 35% of worker box)
                 elif "goggle" in lbl or "glasses" in lbl:
@@ -261,9 +270,11 @@ class WorkerPPEEvaluator:
         head_crop = frame[sy1:sy2, sx1:sx2]
         crown_roi = (sx1, sy1, sx2, sy2)
 
-        # If a valid on-head helmet was detected by neural YOLO, anchor crown_roi to that box
+        # If a valid on-head helmet was detected by neural YOLO, anchor crown_roi and head_crop to that box
         if helmet_neural_box is not None:
             crown_roi = helmet_neural_box
+            if crown_roi[3] > crown_roi[1] and crown_roi[2] > crown_roi[0]:
+                head_crop = frame[crown_roi[1]:crown_roi[3], crown_roi[0]:crown_roi[2]]
 
         # Secondary targeted neural YOLO inference on head crop (vital for closeup webcam workers)
         if not helmet_neural and self.ppe_model is not None and head_crop.size > 0:
@@ -421,7 +432,7 @@ class WorkerPPEEvaluator:
         if gloves_neural:
             gloves_status = "PASS"
             hands_visible = True
-        elif bare_hands_neural or bare_hands_skin:
+        elif bare_hands_neural:
             gloves_status = "FAIL"
             hands_visible = True
         elif aspect_ratio >= 1.50 and feet_visible:
@@ -433,11 +444,12 @@ class WorkerPPEEvaluator:
 
         # Overall Compliance:
         # Mandatory requirements: Helmet PASS and Vest PASS.
-        # Strict violation check: Neither gloves nor shoes can be FAIL if visible!
+        # Evidence check: Gloves must be verified PASS or UNKNOWN without violation.
+        # Do not treat missing detections as proof of compliance.
         is_compliant = (
             (helmet_status == "PASS")
             and (vest_status == "PASS")
-            and (gloves_status != "FAIL")
+            and (gloves_status == "PASS")
             and (shoes_status != "FAIL")
         )
         confidence_score = float(max(0.85, helmet_neural_conf, vest_neural_conf))
@@ -711,22 +723,17 @@ class WorkerPPEEvaluator:
         mask_orange_raw = cv2.inRange(hsv, np.array([7, 155, 125]), np.array([20, 255, 255]))
         mask_orange = cv2.bitwise_and(mask_orange_raw, cv2.bitwise_not(mask_skin))
 
-        # Industrial Safety Blue: H: 98-128, S: 120-255, V: 90-255
-        mask_blue = cv2.inRange(hsv, np.array([98, 120, 90]), np.array([128, 255, 255]))
-
         neon_px = cv2.countNonZero(mask_neon) + cv2.countNonZero(mask_green)
         orange_px = cv2.countNonZero(mask_orange)
-        blue_px = cv2.countNonZero(mask_blue)
 
         neon_ratio = neon_px / total_pixels
         orange_ratio = orange_px / total_pixels
-        blue_ratio = blue_px / total_pixels
 
-        if neon_ratio >= 0.16:
+        # Require genuine high-visibility fluorescent neon yellow or safety orange
+        # Everyday civilian blue shirts/clothes MUST NOT trigger safety vest PASS
+        if neon_ratio >= 0.18:
             return True, "NEON_YELLOW", neon_ratio
-        elif orange_ratio >= 0.16:
+        elif orange_ratio >= 0.18:
             return True, "HI_VIS_ORANGE", orange_ratio
-        elif blue_ratio >= 0.20:
-            return True, "SAFETY_BLUE", blue_ratio
 
-        return False, "NONE", max(neon_ratio, orange_ratio, blue_ratio)
+        return False, "NONE", max(neon_ratio, orange_ratio)

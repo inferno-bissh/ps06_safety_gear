@@ -1233,16 +1233,57 @@
   - Modified: [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
   - Created: [`vision_pipeline/tests/test_fix_verification.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/tests/test_fix_verification.py)
 
+### Session: 2026-10-12 (Session 20)
+- **Agent Focus:** Safe, Targeted Bug Fixes for CCTV 3 Stale Detection, CCTV 4 Person Detection, and CCTV 2 False Vest/Gloves PASS.
+- **Empirical Diagnostics & Confirmed Root Causes:**
+  1. **Issue 1 (CCTV 3 Stale/Frozen Detection) & Issue 2 (CCTV 4 Person Not Detected) Shared Root Cause:**
+     - **Inference Omission:** In `vision_pipeline/multicam_orchestrator.py`, the AI inference loop in `run()` only evaluated CCTV 1 (`gate_stream`) and CCTV 2 (`ward_stream`). Frames from CCTV 3 and 4 were fetched and broadcasted over port 5000 as raw JPEGs, but were never sent to YOLO person detection or PPE evaluation!
+     - **Stale Frontend Retention Trap:** In `dashboard/src/context/SafetyContext.tsx`, because CCTV 3 had no live detections from the orchestrator, a retention fallback `if (oldW.camera_id !== "CCTV_01" && oldW.camera_id !== "CCTV_02") liveMap.set(oldW.worker_track_id, oldW);` permanently kept the initial mock `TRACK_09` with its yellow bounding box on screen even when the live scene changed.
+     - **CCTV 4 Permanent "Person Not Detected":** `initialWorkers` had no mock worker for CCTV 4, and the Python orchestrator generated 0 workers for CCTV 4. Consequently, `zoneWorkers` for CCTV 4 was always empty, causing `CameraViewer.tsx` line 318 to permanently report "Person Not Detected" even with a person in the frame.
+  2. **Issue 3 (CCTV 2 False Vest and Gloves PASS) Confirmed Root Causes:**
+     - **Plain Blue Shirt Misclassification:** In `vision_pipeline/ppe_detector.py` (`_check_vest_hsv`), `elif blue_ratio >= 0.20: return True, "SAFETY_BLUE", blue_ratio` falsely classified any ordinary civilian blue shirt as a high-visibility safety vest PASS.
+     - **Unbounded Neural Candidate Scale:** In `evaluate_ppe`, candidate items labeled "vest" and "glove" were matched without scale or position checks. Low-confidence (0.20) candidate gloves and dark non-skin objects (such as dark chair armrests or denim pants) triggered `gloves_neural = True` and produced `Gloves=PASS`.
+     - **Missing Evidence Treated as Compliant:** When hands were not detected, `gloves_status` was `"UNKNOWN"`, but `is_compliant = ... and (gloves_status != "FAIL")` treated missing evidence as proof of compliance.
+- **Implemented Fixes:**
+  1. **Auxiliary Stream AI Inference Pipeline (`multicam_orchestrator.py`):**
+     - Initialized isolated ByteTrack YOLO detector instances and PPE evaluators for CCTV 3 (`self.cctv3_model`, `self.cctv3_ppe_evaluator`) and CCTV 4 (`self.cctv4_model`, `self.cctv4_ppe_evaluator`).
+     - Added `process_aux_camera_stream(frame, camera_id, zone_id, ...)` with fast downscaled inference (640x360), person tracking, and PPE evaluation.
+     - Integrated `self.cctv3_workers` and `self.cctv4_workers` into `update_workers(gate_workers + ward_workers + cctv3_workers + cctv4_workers)`.
+     - Added automatic expiration: if stream stalls >2.0s or is disconnected, cached workers are immediately cleared.
+  2. **Authoritative Live Detection Sync (`SafetyContext.tsx`):**
+     - Updated `syncLiveWorkers` so that when `isVisionEngineOnline` is true, `setWorkers(data.workers)` syncs live detected workers directly, preventing stale mock workers from freezing on screen.
+  3. **Strict High-Vis Vest & Gloves Discrimination (`ppe_detector.py`):**
+     - Removed `blue_ratio >= 0.20` from `_check_vest_hsv`. Required genuine fluorescent neon yellow (`neon_ratio >= 0.18`) or fluorescent safety orange (`orange_ratio >= 0.18`).
+     - Tightened vest candidate matching: required torso scale consistency (`0.30 * box_w <= vw <= 1.30 * box_w`, `0.18 * box_h <= vh <= 0.75 * box_h`), horizontal centering, and confidence >= 0.40.
+     - Tightened gloves candidate matching: required hand scale consistency (`gw <= 0.42 * box_w`, `gh <= 0.38 * box_h`), arm/hand anatomical range, and confidence >= 0.38.
+     - Updated compliance check in `ppe_detector.py` and `multicam_orchestrator.py`: require positive evidence (`gloves_status == "PASS"`); `UNKNOWN` or missing gloves do not produce a compliant PASS.
+- **Verification & Test Results:**
+  - Automated test suite `vision_pipeline/scratch/test_all_three_fixes.py` passed all test cases:
+    - CCTV 3 Empty Scene: `count=0` (stale bounding box cleared immediately).
+    - CCTV 4 Person & Helmet: Aux pipeline accurately detects person and helmet.
+    - CCTV 2 Ordinary Blue Shirt: `Vest=FAIL` (blue shirt rejected).
+    - CCTV 2 Inanimate Chair Arm: `Gloves=UNKNOWN`, `Compliant=False` (rejected).
+    - CCTV 2 Genuine Neon Vest & Gloves: `Vest=PASS`, `Gloves=PASS`.
+  - Automated test suite `vision_pipeline/scratch/test_helmet_logic.py` passed all 3 scenarios:
+    - Bare Head: `Helmet=FAIL, BARE_HAIR`
+    - Helmet Aside on Desk: `Helmet=FAIL, BARE_HAIR`
+    - Wearing Helmet: `Helmet=PASS, YELLOW`
+  - TypeScript compilation: `npx tsc --noEmit` exited with 0 errors.
+  - Python compilation: `python -m py_compile` exited with 0 errors.
+  - Live endpoints verified: `/health` (ONLINE), `/api/workers` (live telemetry broadcast active).
+- **Files Modified:**
+  - Modified: [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+  - Created: [`vision_pipeline/scratch/test_all_three_fixes.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_all_three_fixes.py), [`vision_pipeline/scratch/test_vest_gloves.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_vest_gloves.py)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **Mobile Phone Stream Pairing (CCTV 2, 3, 4):**
-   - Start IP Webcam on phone, verify IP in dashboard settings.
-2. **Hardware / Modbus Telemetry Bring-Up:**
-   - Ingest physical ESP32 Modbus RTU telemetry for zone environmental sensors.
-3. **Fire & Smoke Real-World Burner Testing:**
-   - Verify YOLOv8 fire/smoke weights under physical flame/smoke testing conditions.
+1. **Physical Multi-Phone Live Feed Verification:**
+   - With live phones connected to CCTV 2, 3, and 4 on the local network (`http://<ip>:8080/video`), observe dynamic worker tracking and helmet/vest detection across multiple camera angles.
+2. **Zone Environmental RTU Bring-Up:**
+   - Ingest physical ESP32 Modbus RTU telemetry for zone environmental sensors (flame, smoke, temperature).
+
 
 
 

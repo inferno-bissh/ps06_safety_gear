@@ -141,10 +141,20 @@ class MultiCameraOrchestrator:
             self.ward_ppe_evaluator.sim_force_vest = True
             print("[PPE Engine] Demo override active: Forcing all detected personnel to PASS PPE.")
 
-        # 4. YOLO Object Detectors (Independent instances for Gate & Ward to maintain isolated ByteTrack trajectories)
+        # 4. YOLO Object Detectors (Independent instances for Gate, Ward, CCTV 3, CCTV 4 to maintain isolated ByteTrack trajectories)
         print("[AI Engine] Loading YOLOv8 nano models for Gate & Ward...")
         self.gate_model = YOLO("yolov8n.pt")
         self.ward_model = YOLO("yolov8n.pt")
+        self.cctv3_model = YOLO("yolov8n.pt")
+        self.cctv4_model = YOLO("yolov8n.pt")
+
+        self.cctv3_ppe_evaluator = WorkerPPEEvaluator(temporal_threshold=5)
+        self.cctv4_ppe_evaluator = WorkerPPEEvaluator(temporal_threshold=5)
+        if self.demo_ppe_pass:
+            self.cctv3_ppe_evaluator.sim_force_helmet = True
+            self.cctv3_ppe_evaluator.sim_force_vest = True
+            self.cctv4_ppe_evaluator.sim_force_helmet = True
+            self.cctv4_ppe_evaluator.sim_force_vest = True
 
         # 5. Threaded Stream Ingestion
         print("[Stream Manager] Initializing decoupled camera threads...")
@@ -161,6 +171,10 @@ class MultiCameraOrchestrator:
         self.last_gate_eval_time: float = 0.0
         self.cached_gate_workers = []
         self.cached_gate_drawings = []
+        self.cctv3_workers = []
+        self.cctv4_workers = []
+        self.last_cctv3_eval_time: float = 0.0
+        self.last_cctv4_eval_time: float = 0.0
         self.last_smoke_incident_time: float = 0.0
         self.last_fire_incident_time: float = 0.0
         self.last_cctv3_ts: float = 0.0
@@ -226,6 +240,7 @@ class MultiCameraOrchestrator:
             if action == "disconnect":
                 if self.cctv3_stream:
                     self.cctv3_stream.disconnect()
+                self.cctv3_workers = []
                 self.web_broadcaster.clear_frame("cctv3")
                 save_camera_config({"cctv3_status": "DISCONNECTED"})
                 return True, "CCTV 3 (Phone 2) stream disconnected to standby mode"
@@ -257,6 +272,7 @@ class MultiCameraOrchestrator:
             if action == "disconnect":
                 if self.cctv4_stream:
                     self.cctv4_stream.disconnect()
+                self.cctv4_workers = []
                 self.web_broadcaster.clear_frame("cctv4")
                 save_camera_config({"cctv4_status": "DISCONNECTED"})
                 return True, "CCTV 4 (Phone 3) stream disconnected to standby mode"
@@ -959,6 +975,142 @@ class MultiCameraOrchestrator:
 
         return "Worker ID Unknown (Facing away)", "Uncorrelated Work Area Track"
 
+    def process_aux_camera_stream(
+        self,
+        frame: np.ndarray,
+        camera_id: str,
+        zone_id: str,
+        ppe_evaluator: WorkerPPEEvaluator,
+        model: YOLO,
+        cam_prefix: str,
+    ) -> list:
+        """Processes auxiliary camera streams (CCTV 3 & CCTV 4) for person tracking and PPE compliance."""
+        if frame is None or frame.size == 0:
+            return []
+
+        fh, fw = frame.shape[:2]
+
+        # Fast downscaled inference (downscale to 640x360 for high-FPS multi-stream performance)
+        if fw > 640:
+            scale_x = fw / 640.0
+            scale_y = fh / 360.0
+            infer_frame = cv2.resize(frame, (640, 360))
+        else:
+            scale_x = 1.0
+            scale_y = 1.0
+            infer_frame = frame
+
+        ppe_items = ppe_evaluator.detect_frame_ppe(infer_frame)
+        if scale_x != 1.0 or scale_y != 1.0:
+            scaled_ppe = []
+            for it in ppe_items:
+                b = it["box"]
+                scaled_ppe.append({
+                    "label": it["label"],
+                    "conf": it["conf"],
+                    "box": (int(b[0] * scale_x), int(b[1] * scale_y), int(b[2] * scale_x), int(b[3] * scale_y)),
+                })
+            ppe_items = scaled_ppe
+
+        results = model.track(
+            infer_frame,
+            persist=True,
+            classes=[0],
+            tracker="bytetrack.yaml",
+            conf=PERSON_CONF_THRESHOLD,
+            verbose=False,
+        )
+
+        boxes = []
+        track_ids = []
+        confidences = []
+        if results and len(results[0].boxes) > 0:
+            raw_b = results[0].boxes.xyxy.cpu().numpy().astype(int).tolist()
+            raw_c = results[0].boxes.conf.cpu().numpy().tolist()
+            if results[0].boxes.id is not None:
+                raw_t = results[0].boxes.id.cpu().numpy().astype(int).tolist()
+            else:
+                raw_t = [i + 1 for i in range(len(raw_b))]
+            for b, t, c in zip(raw_b, raw_t, raw_c):
+                boxes.append([int(b[0] * scale_x), int(b[1] * scale_y), int(b[2] * scale_x), int(b[3] * scale_y)])
+                track_ids.append(t)
+                confidences.append(c)
+        elif ppe_items:
+            # Inspection fallback when holding phone camera close-up to inspect safety gear
+            ix1 = min(item["box"][0] for item in ppe_items)
+            iy1 = min(item["box"][1] for item in ppe_items)
+            ix2 = max(item["box"][2] for item in ppe_items)
+            iy2 = max(item["box"][3] for item in ppe_items)
+            pad = 25
+            boxes = [[max(0, ix1 - pad), max(0, iy1 - pad), min(fw, ix2 + pad), min(fh, iy2 + pad)]]
+            track_ids = [1]
+            confidences = [0.85]
+
+        aux_workers = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        for box, track_id, conf in zip(boxes, track_ids, confidences):
+            x1, y1, x2, y2 = map(int, box)
+            str_tid = f"{cam_prefix.upper()}_{track_id:02d}"
+
+            ppe_res = ppe_evaluator.evaluate_ppe(
+                frame, (x1, y1, x2, y2), str_tid, frame_ppe_items=ppe_items, face_bbox=None
+            )
+
+            is_human = self._is_valid_human_detection(
+                frame, (x1, y1, x2, y2), conf, None, ppe_res, track_id, cam_prefix
+            )
+            if not is_human:
+                continue
+
+            helmet = ppe_res.get("helmet", "FAIL")
+            vest = ppe_res.get("vest", "FAIL")
+            gloves = ppe_res.get("gloves", "UNKNOWN")
+            shoes = ppe_res.get("safety_shoes", "UNKNOWN")
+
+            is_compliant = (helmet == "PASS") and (vest == "PASS") and (gloves != "FAIL") and (shoes != "FAIL")
+
+            cx1, cy1, cx2, cy2 = ppe_res.get("crown_roi", (0, 0, 0, 0))
+            is_helmet_pass = (helmet == "PASS")
+
+            x1 = max(0, min(fw - 1, x1))
+            y1 = max(0, min(fh - 1, y1))
+            x2 = max(x1 + 10, min(fw, x2))
+            y2 = max(y1 + 20, min(fh, y2))
+
+            aux_workers.append({
+                "worker_track_id": str_tid,
+                "camera_id": camera_id,
+                "zone_id": zone_id,
+                "confidence": float(round(float(conf), 2)),
+                "status": "ACTIVE",
+                "last_seen": now_iso,
+                "ppe": {
+                    "helmet": helmet,
+                    "vest": vest,
+                    "gloves": gloves,
+                    "safety_shoes": shoes,
+                },
+                "bbox": {
+                    "x": float(round((x1 / fw) * 100, 1)),
+                    "y": float(round((y1 / fh) * 100, 1)),
+                    "width": float(round(((x2 - x1) / fw) * 100, 1)),
+                    "height": float(round(((y2 - y1) / fh) * 100, 1)),
+                    "label": f"Worker [{str_tid}]",
+                    "color": "#10b981" if is_compliant else "#f59e0b",
+                },
+                "helmet_bbox": {
+                    "x": float(round((max(0, min(fw - 1, cx1)) / fw) * 100, 1)),
+                    "y": float(round((max(0, min(fh - 1, cy1)) / fw) * 100, 1)),
+                    "width": float(round((max(1, min(fw - cx1, cx2 - cx1)) / fw) * 100, 1)),
+                    "height": float(round((max(1, min(fh - cy1, cy2 - cy1)) / fw) * 100, 1)),
+                    "label": "Helmet Detected" if is_helmet_pass else "Helmet Not Detected",
+                    "color": "#10b981" if is_helmet_pass else "#ef4444",
+                } if (cx2 > cx1 and cy2 > cy1) else None,
+            })
+
+        return aux_workers
+
     def run(self):
         """Main multi-stream execution loop."""
         print("\n[Orchestrator Running] Ingesting Gate and Ward streams. Press 'q' to stop.")
@@ -977,6 +1129,8 @@ class MultiCameraOrchestrator:
                 if gate_frame is None:
                     gate_frame = get_standby_numpy_frame("cctv1")
 
+                h_sub, w_sub = 360, 640
+
                 # 2. Process Gate stream (Entry access verification & PPE)
                 gate_workers = self.process_gate_stream(gate_frame) or []
 
@@ -993,12 +1147,55 @@ class MultiCameraOrchestrator:
                     ward_workers = []
                     ward_resized = get_standby_numpy_frame("cctv2")
 
-                # Broadcast live worker tracking telemetry for dashboard
-                if not self.test_mode:
-                    self.web_broadcaster.update_workers(gate_workers + ward_workers)
+                # 4. Process Aux streams (CCTV 3 & CCTV 4 for sustained person & PPE tracking)
+                if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
+                    f3, ts3 = self.cctv3_stream.get_latest_frame(copy=False)
+                    if f3 is not None:
+                        if ts3 > self.last_cctv3_ts:
+                            self.last_cctv3_ts = ts3
+                            self.web_broadcaster.update_frame("cctv3", cv2.resize(f3, (w_sub, h_sub)))
+                            if (now - self.last_cctv3_eval_time) >= 0.12:
+                                self.cctv3_workers = self.process_aux_camera_stream(
+                                    f3, "CCTV_03", "WELDING_ZONE", self.cctv3_ppe_evaluator, self.cctv3_model, "cctv3"
+                                )
+                                self.last_cctv3_eval_time = now
+                        elif (now - self.last_cctv3_ts) > 2.0:
+                            # Stream stalled / frozen: clear stale detections
+                            self.cctv3_workers = []
+                    else:
+                        self.cctv3_workers = []
+                else:
+                    self.cctv3_workers = []
+                    if not self.test_mode:
+                        self.web_broadcaster.clear_frame("cctv3")
 
-                # 4. Render Dual-Stream Composite Tactical Display
-                h_sub, w_sub = 360, 640
+                if self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode:
+                    f4, ts4 = self.cctv4_stream.get_latest_frame(copy=False)
+                    if f4 is not None:
+                        if ts4 > self.last_cctv4_ts:
+                            self.last_cctv4_ts = ts4
+                            self.web_broadcaster.update_frame("cctv4", cv2.resize(f4, (w_sub, h_sub)))
+                            if (now - self.last_cctv4_eval_time) >= 0.12:
+                                self.cctv4_workers = self.process_aux_camera_stream(
+                                    f4, "CCTV_04", "WELDING_ZONE", self.cctv4_ppe_evaluator, self.cctv4_model, "cctv4"
+                                )
+                                self.last_cctv4_eval_time = now
+                        elif (now - self.last_cctv4_ts) > 2.0:
+                            # Stream stalled / frozen: clear stale detections
+                            self.cctv4_workers = []
+                    else:
+                        self.cctv4_workers = []
+                else:
+                    self.cctv4_workers = []
+                    if not self.test_mode:
+                        self.web_broadcaster.clear_frame("cctv4")
+
+                # Broadcast live worker tracking telemetry for dashboard
+                all_workers = gate_workers + ward_workers + self.cctv3_workers + self.cctv4_workers
+                if not self.test_mode:
+                    self.web_broadcaster.update_workers(all_workers)
+
+                # 5. Render Dual-Stream Composite Tactical Display
                 gate_resized = cv2.resize(gate_frame, (w_sub, h_sub))
 
                 # Header bars on crops
@@ -1081,12 +1278,12 @@ class MultiCameraOrchestrator:
                 footer = np.zeros((footer_h, composite.shape[1], 3), dtype=np.uint8)
                 footer[:] = (15, 20, 28)
                 active_list = ", ".join(self.active_checked_in_workers.keys()) or "None"
-                total_active_workers = len(gate_workers) + len(ward_workers)
+                total_active_workers = len(all_workers)
                 cv2.putText(footer, f"FPS: {fps:.1f} | TRACKED WORKERS: {total_active_workers} | PERSONNEL: [{active_list}] | CCTV 1-4 READY", (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 220, 240), 1)
 
                 display_view = np.vstack([composite, footer])
 
-                # 5. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
+                # 6. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
                 if not self.test_mode:
                     self.web_broadcaster.update_frame("cctv1", gate_resized)
                     if not self.ward_stream.is_synthetic_mode:
@@ -1095,21 +1292,6 @@ class MultiCameraOrchestrator:
                         self.web_broadcaster.clear_frame("cctv2")
 
                     self.web_broadcaster.update_frame("composite", display_view)
-                    if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
-                        f3, ts3 = self.cctv3_stream.get_latest_frame(copy=False)
-                        if f3 is not None and ts3 > self.last_cctv3_ts:
-                            self.last_cctv3_ts = ts3
-                            self.web_broadcaster.update_frame("cctv3", cv2.resize(f3, (w_sub, h_sub)))
-                    else:
-                        self.web_broadcaster.clear_frame("cctv3")
-
-                    if self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode:
-                        f4, ts4 = self.cctv4_stream.get_latest_frame(copy=False)
-                        if f4 is not None and ts4 > self.last_cctv4_ts:
-                            self.last_cctv4_ts = ts4
-                            self.web_broadcaster.update_frame("cctv4", cv2.resize(f4, (w_sub, h_sub)))
-                    else:
-                        self.web_broadcaster.clear_frame("cctv4")
 
                 # In test mode, exit after 40 frames without GUI rendering
                 if self.test_mode:
