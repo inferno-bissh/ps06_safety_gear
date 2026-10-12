@@ -68,9 +68,13 @@ export async function POST(req: NextRequest) {
     const cctv3 = body.cctv3 || savedConfig.cctv3 || "";
     const cctv4 = body.cctv4 || savedConfig.cctv4 || "";
 
-    // Sanitize against broadcast URLs containing :5000
-    if (String(cctv1).includes(":5000")) cctv1 = savedConfig.cctv1 || "0";
-    if (String(cctv2).includes(":5000")) cctv2 = savedConfig.cctv2 || "http://192.168.1.5:8080/video";
+    // Sanitize against broadcast URLs containing :5000 or corrupted 0-endpoints
+    if (String(cctv1).includes(":5000") || String(cctv1).includes("http://0:") || String(cctv1) === "0") {
+      cctv1 = "0";
+    }
+    if (String(cctv2).includes(":5000") || String(cctv2).includes("http://0:")) {
+      cctv2 = savedConfig.cctv2 && !savedConfig.cctv2.includes("http://0:") ? savedConfig.cctv2 : "http://192.168.1.5:8080/video";
+    }
 
     // Auto-normalize phone camera endpoints on port 8080 or 4747
     if (String(cctv2).startsWith("http://") && (String(cctv2).endsWith(":8080") || String(cctv2).endsWith(":8080/"))) {
@@ -102,7 +106,7 @@ export async function POST(req: NextRequest) {
       const targetChannel = (body.channel || "cctv2").toLowerCase();
       const targetSource = body.source || (targetChannel === "cctv3" ? cctv3 : targetChannel === "cctv4" ? cctv4 : cctv2);
       try {
-        const resSource = await fetch("http://localhost:5000/api/cameras/source", {
+        const resSource = await fetch("http://127.0.0.1:5000/api/cameras/source", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ channel: targetChannel, source: targetSource, action: body.action || "connect" }),

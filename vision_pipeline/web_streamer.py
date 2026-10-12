@@ -53,30 +53,92 @@ def register_camera_callbacks(source_callback=None, status_callback=None):
     _CAMERA_SOURCE_CALLBACK = source_callback
     _CAMERA_STATUS_CALLBACK = status_callback
 
+def get_standby_numpy_frame(channel: str) -> np.ndarray:
+    """Generates a high-tech tactical standby card for disconnected/standby camera channels."""
+    img = np.zeros((360, 640, 3), dtype=np.uint8)
+    # Tactical industrial slate background
+    img[:] = (20, 16, 12)
+
+    # Subtle radar grid lines
+    for x in range(40, 640, 60):
+        cv2.line(img, (x, 30), (x, 330), (32, 26, 20), 1)
+    for y in range(40, 360, 60):
+        cv2.line(img, (30, y), (610, y), (32, 26, 20), 1)
+
+    # Outer tactical border
+    cv2.rectangle(img, (20, 20), (620, 340), (45, 38, 30), 1)
+
+    # High-tech corner brackets
+    c_len = 16
+    # Top-Left
+    cv2.line(img, (20, 20), (20 + c_len, 20), (0, 220, 255), 2)
+    cv2.line(img, (20, 20), (20, 20 + c_len), (0, 220, 255), 2)
+    # Top-Right
+    cv2.line(img, (620, 20), (620 - c_len, 20), (0, 220, 255), 2)
+    cv2.line(img, (620, 20), (620, 20 + c_len), (0, 220, 255), 2)
+    # Bottom-Left
+    cv2.line(img, (20, 340), (20 + c_len, 340), (0, 220, 255), 2)
+    cv2.line(img, (20, 340), (20, 340 - c_len), (0, 220, 255), 2)
+    # Bottom-Right
+    cv2.line(img, (620, 340), (620 - c_len, 340), (0, 220, 255), 2)
+    cv2.line(img, (620, 340), (620, 340 - c_len), (0, 220, 255), 2)
+
+    # Center tactical reticle
+    cx, cy = 320, 180
+    cv2.circle(img, (cx, cy), 32, (50, 42, 32), 1)
+    cv2.line(img, (cx - 45, cy), (cx - 20, cy), (0, 200, 255), 1)
+    cv2.line(img, (cx + 20, cy), (cx + 45, cy), (0, 200, 255), 1)
+    cv2.line(img, (cx, cy - 45), (cx, cy - 20), (0, 200, 255), 1)
+    cv2.line(img, (cx, cy + 20), (cx, cy + 45), (0, 200, 255), 1)
+
+    ch = str(channel).lower()
+    if ch in ("cctv2", "ward", "phone1"):
+        title = "[CCTV 2] PRODUCTION BAY — PHONE 1 STREAM"
+        status_txt = "STATUS: STANDBY — AWAITING MOBILE STREAM"
+        inst1 = "Launch 'IP Webcam' app on Phone 1 -> Start Server"
+        inst2 = "Target Endpoint: http://<PHONE_IP>:8080/video"
+        accent_col = (0, 210, 255)
+    elif ch in ("cctv3", "left", "phone2"):
+        title = "[CCTV 3] SIDE ANGLE LEFT — PHONE 2 STREAM"
+        status_txt = "STATUS: STANDBY — AWAITING MOBILE STREAM"
+        inst1 = "Launch 'IP Webcam' app on Phone 2 -> Start Server"
+        inst2 = "Configure Phone 2 URL in Dashboard Settings"
+        accent_col = (255, 180, 0)
+    elif ch in ("cctv4", "right", "phone3"):
+        title = "[CCTV 4] SIDE ANGLE RIGHT — PHONE 3 STREAM"
+        status_txt = "STATUS: STANDBY — AWAITING MOBILE STREAM"
+        inst1 = "Launch 'IP Webcam' app on Phone 3 -> Start Server"
+        inst2 = "Configure Phone 3 URL in Dashboard Settings"
+        accent_col = (180, 100, 255)
+    elif ch in ("cctv1", "gate"):
+        title = "[CCTV 1] GATE CHOKE-POINT — WEBCAM"
+        status_txt = "STATUS: INITIALIZING DIRECTSHOW WEBCAM..."
+        inst1 = "Checking device index 0 (Integrated Webcam)"
+        inst2 = "Stream will resume automatically"
+        accent_col = (0, 255, 180)
+    else:
+        title = f"[{channel.upper()}] CCTV MONITORING STANDBY"
+        status_txt = "STATUS: STANDBY — AWAITING CAMERA FEED"
+        inst1 = "Configure camera endpoint in settings"
+        inst2 = "Port 5000 Video Broadcaster Ready"
+        accent_col = (200, 200, 200)
+
+    # Header Bar
+    cv2.rectangle(img, (22, 22), (618, 56), (30, 24, 18), -1)
+    cv2.circle(img, (40, 39), 5, accent_col, -1)
+    cv2.putText(img, title, (54, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (230, 240, 250), 1)
+
+    # Status & Instructions Overlay
+    cv2.putText(img, status_txt, (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.46, accent_col, 1)
+    cv2.putText(img, inst1, (50, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 195, 210), 1)
+    cv2.putText(img, inst2, (50, 285), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 155, 170), 1)
+    cv2.putText(img, "SAFETYINTEL INDUSTRIAL VISION ENGINE — PORT 5000", (50, 320), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (90, 105, 120), 1)
+    return img
+
 def _get_default_standby_frame(channel: str) -> bytes:
     if channel in _STANDBY_CACHE:
         return _STANDBY_CACHE[channel]
-    img = np.zeros((360, 640, 3), dtype=np.uint8)
-    img[:] = (20, 26, 36)
-    cv2.rectangle(img, (20, 20), (620, 340), (45, 55, 72), 2)
-    ch_upper = channel.upper()
-    if channel == "cctv3":
-        label = "[CCTV 3 - PHONE 2] AWAITING STREAM"
-        sub = "Camera disconnected / standby. Configure IP in settings."
-    elif channel == "cctv4":
-        label = "[CCTV 4 - PHONE 3] AWAITING STREAM"
-        sub = "Camera disconnected / standby. Configure IP in settings."
-    elif channel == "cctv2":
-        label = "[CCTV 2 - PHONE 1] AWAITING STREAM"
-        sub = "Camera disconnected / standby. Configure IP in settings."
-    elif channel == "cctv1":
-        label = "[CCTV 1 - WEBCAM] HARDWARE STANDBY"
-        sub = "DirectShow webcam initializing..."
-    else:
-        label = f"[{ch_upper}] STANDBY FEED"
-        sub = "Awaiting camera hardware connection..."
-    cv2.putText(img, label, (40, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 200, 255), 2)
-    cv2.putText(img, sub, (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (160, 180, 200), 1)
+    img = get_standby_numpy_frame(channel)
     ret, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
     data = jpeg.tobytes() if ret else b""
     _STANDBY_CACHE[channel] = data

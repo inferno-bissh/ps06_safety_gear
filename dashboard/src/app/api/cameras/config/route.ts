@@ -73,7 +73,7 @@ export async function GET() {
   let orchestratorOnline = false;
 
   try {
-    const res = await fetch("http://localhost:5000/api/cameras/status", {
+    const res = await fetch("http://127.0.0.1:5000/api/cameras/status", {
       signal: AbortSignal.timeout(1000),
     });
     if (res.ok) {
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
 
       // Notify Python orchestrator
       try {
-        await fetch("http://localhost:5000/api/cameras/source", {
+        await fetch("http://127.0.0.1:5000/api/cameras/source", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ channel, action: "disconnect" }),
@@ -125,48 +125,68 @@ export async function POST(req: NextRequest) {
 
     // 2. Format & normalize camera input
     let rawInput = (body.ip || body.url || "").trim();
-    if (!rawInput) {
+    if (!rawInput && channel === "cctv1") {
+      rawInput = "0";
+    } else if (!rawInput) {
       const cfg = loadConfig();
-      rawInput = cfg[channel] || "http://192.168.1.5:8080/video";
+      rawInput = cfg[channel] || "";
     }
+
+    // Special handling for local webcam (CCTV 1)
+    const isLocalWebcam = channel === "cctv1" && (rawInput === "0" || rawInput.toLowerCase() === "webcam" || rawInput.toLowerCase() === "local");
 
     let streamUrl = rawInput;
     let ipOnly = "";
     let portNum = 8080;
     let endpoint = "/video";
 
-    if (!streamUrl.startsWith("http://") && !streamUrl.startsWith("https://") && !streamUrl.startsWith("rtsp://")) {
-      if (streamUrl.includes(":")) {
-        const parts = streamUrl.split(":");
-        ipOnly = parts[0];
-        const portPart = parts[1].split("/")[0];
-        portNum = parseInt(portPart, 10) || 8080;
-        endpoint = parts[1].includes("/") ? "/" + parts[1].split("/").slice(1).join("/") : "/video";
-        streamUrl = `http://${ipOnly}:${portNum}${endpoint}`;
-      } else {
-        ipOnly = streamUrl;
-        portNum = body.port ? parseInt(body.port, 10) : 8080;
-        endpoint = body.endpoint ? (body.endpoint.startsWith("/") ? body.endpoint : `/${body.endpoint}`) : "/video";
-        streamUrl = `http://${ipOnly}:${portNum}${endpoint}`;
-      }
+    if (isLocalWebcam) {
+      streamUrl = "0";
+      ipOnly = "local";
+      portNum = 0;
+      endpoint = "webcam";
     } else {
-      try {
-        const parsed = new URL(streamUrl);
-        ipOnly = parsed.hostname;
-        portNum = parseInt(parsed.port, 10) || 8080;
-        endpoint = parsed.pathname || "/video";
-      } catch {
-        ipOnly = rawInput.replace(/^https?:\/\//, "").split(":")[0];
+      // Disallow "0" or invalid IP on network channels
+      if (rawInput === "0" || rawInput === "http://0:8080/video") {
+        return NextResponse.json(
+          { success: false, error: "Invalid phone stream address. Network cameras require a valid phone IP on your Wi-Fi (e.g., 192.168.1.23:8080)." },
+          { status: 400 }
+        );
       }
-    }
 
-    // Auto-normalize phone camera endpoints on port 8080 or 4747
-    if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":8080") || streamUrl.endsWith(":8080/"))) {
-      streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
-      endpoint = "/video";
-    } else if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":4747") || streamUrl.endsWith(":4747/"))) {
-      streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
-      endpoint = "/video";
+      if (!streamUrl.startsWith("http://") && !streamUrl.startsWith("https://") && !streamUrl.startsWith("rtsp://")) {
+        if (streamUrl.includes(":")) {
+          const parts = streamUrl.split(":");
+          ipOnly = parts[0];
+          const portPart = parts[1].split("/")[0];
+          portNum = parseInt(portPart, 10) || 8080;
+          endpoint = parts[1].includes("/") ? "/" + parts[1].split("/").slice(1).join("/") : "/video";
+          streamUrl = `http://${ipOnly}:${portNum}${endpoint}`;
+        } else {
+          ipOnly = streamUrl;
+          portNum = body.port ? parseInt(body.port, 10) : 8080;
+          endpoint = body.endpoint ? (body.endpoint.startsWith("/") ? body.endpoint : `/${body.endpoint}`) : "/video";
+          streamUrl = `http://${ipOnly}:${portNum}${endpoint}`;
+        }
+      } else {
+        try {
+          const parsed = new URL(streamUrl);
+          ipOnly = parsed.hostname;
+          portNum = parseInt(parsed.port, 10) || 8080;
+          endpoint = parsed.pathname || "/video";
+        } catch {
+          ipOnly = rawInput.replace(/^https?:\/\//, "").split(":")[0];
+        }
+      }
+
+      // Auto-normalize phone camera endpoints on port 8080 or 4747
+      if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":8080") || streamUrl.endsWith(":8080/"))) {
+        streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
+        endpoint = "/video";
+      } else if (streamUrl.startsWith("http://") && (streamUrl.endsWith(":4747") || streamUrl.endsWith(":4747/"))) {
+        streamUrl = streamUrl.replace(/\/+$/, "") + "/video";
+        endpoint = "/video";
+      }
     }
 
     // 3. Probe phone camera reachability
@@ -174,22 +194,27 @@ export async function POST(req: NextRequest) {
     let latencyMs = 0;
     const startTime = Date.now();
 
-    // Check TCP port first
-    const portOpen = await probeTcpPort(ipOnly, portNum, 1200);
-    if (portOpen) {
+    if (isLocalWebcam) {
       isReachable = true;
-      latencyMs = Date.now() - startTime;
+      latencyMs = 1;
     } else {
-      // Fallback HTTP probe
-      try {
-        const resProbe = await fetch(streamUrl, {
-          method: "GET",
-          signal: AbortSignal.timeout(1500),
-        });
-        isReachable = resProbe.ok || resProbe.status === 200;
+      // Check TCP port first
+      const portOpen = await probeTcpPort(ipOnly, portNum, 1200);
+      if (portOpen) {
+        isReachable = true;
         latencyMs = Date.now() - startTime;
-      } catch {
-        isReachable = false;
+      } else {
+        // Fallback HTTP probe
+        try {
+          const resProbe = await fetch(streamUrl, {
+            method: "GET",
+            signal: AbortSignal.timeout(1500),
+          });
+          isReachable = resProbe.ok || resProbe.status === 200;
+          latencyMs = Date.now() - startTime;
+        } catch {
+          isReachable = false;
+        }
       }
     }
 
@@ -205,7 +230,7 @@ export async function POST(req: NextRequest) {
     // 5. Send dynamic in-process update to Python vision pipeline (Port 5000)
     let dynamicUpdated = false;
     try {
-      const resPy = await fetch("http://localhost:5000/api/cameras/source", {
+      const resPy = await fetch("http://127.0.0.1:5000/api/cameras/source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

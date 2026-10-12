@@ -7,7 +7,7 @@ export async function GET() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1200);
 
-    const res = await fetch("http://localhost:5000/api/hazard", {
+    const res = await fetch("http://127.0.0.1:5000/api/hazard", {
       signal: controller.signal,
       cache: "no-store",
     });
@@ -33,10 +33,10 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const targetUrl = body.type === "reset" || body.reset
-      ? "http://localhost:5000/api/hazard/reset"
+      ? "http://127.0.0.1:5000/api/hazard/reset"
       : body.type === "fire"
-      ? "http://localhost:5000/api/hazard/fire"
-      : "http://localhost:5000/api/hazard/smoke";
+      ? "http://127.0.0.1:5000/api/hazard/fire"
+      : "http://127.0.0.1:5000/api/hazard/smoke";
 
     const res = await fetch(targetUrl, {
       method: "POST",

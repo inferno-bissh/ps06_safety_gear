@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Camera, WorkerTrack } from "@/types/safety";
 import { useSafety } from "@/context/SafetyContext";
 import { PPEChip } from "./PPEChip";
@@ -78,6 +78,60 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   const [snapshotTimestamp, setSnapshotTimestamp] = useState(Date.now());
   const [showPhoneSettings, setShowPhoneSettings] = useState(false);
 
+  // References and dynamic geometry for precise bounding-box overlay alignment
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [videoRect, setVideoRect] = useState<{ left: number; top: number; width: number; height: number }>({
+    left: 0,
+    top: 0,
+    width: 100,
+    height: 100,
+  });
+
+  const updateVideoRect = useCallback(() => {
+    const img = imgRef.current;
+    const container = containerRef.current;
+    if (!img || !container) return;
+
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    const nw = img.naturalWidth || cw;
+    const nh = img.naturalHeight || ch;
+
+    if (cw <= 0 || ch <= 0 || nw <= 0 || nh <= 0) return;
+
+    const containerAspect = cw / ch;
+    const videoAspect = nw / nh;
+
+    let rw = cw;
+    let rh = ch;
+    let rx = 0;
+    let ry = 0;
+
+    if (videoAspect > containerAspect) {
+      // Letterbox on top & bottom
+      rh = cw / videoAspect;
+      ry = (ch - rh) / 2;
+    } else {
+      // Pillarbox on left & right
+      rw = ch * videoAspect;
+      rx = (cw - rw) / 2;
+    }
+
+    setVideoRect({
+      left: Math.max(0, (rx / cw) * 100),
+      top: Math.max(0, (ry / ch) * 100),
+      width: Math.min(100, (rw / cw) * 100),
+      height: Math.min(100, (rh / ch) * 100),
+    });
+  }, []);
+
+  useEffect(() => {
+    updateVideoRect();
+    window.addEventListener("resize", updateVideoRect);
+    return () => window.removeEventListener("resize", updateVideoRect);
+  }, [updateVideoRect]);
+
   const isCctv1 = useMemo(() => {
     const id = (camera.camera_id || "").toLowerCase();
     return id.includes("1") || id.includes("gate") || id === "cam_00";
@@ -94,11 +148,14 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
 
   const defaultStreamEndpoint = useMemo(() => {
     const camId = (camera.camera_id || "").toLowerCase();
-    if (camId.includes("1") || camId.includes("gate")) return "http://localhost:5000/video/cctv1";
-    if (camId.includes("2") || camId.includes("front") || camId.includes("ward")) return "http://localhost:5000/video/cctv2";
-    if (camId.includes("3") || camId.includes("left")) return "http://localhost:5000/video/cctv3";
-    if (camId.includes("4") || camId.includes("right")) return "http://localhost:5000/video/cctv4";
-    return "http://localhost:5000/video/composite";
+    const host = (typeof window !== "undefined" && window.location.hostname && window.location.hostname !== "localhost")
+      ? window.location.hostname
+      : "127.0.0.1";
+    if (camId.includes("1") || camId.includes("gate")) return `http://${host}:5000/video/cctv1`;
+    if (camId.includes("2") || camId.includes("front") || camId.includes("ward")) return `http://${host}:5000/video/cctv2`;
+    if (camId.includes("3") || camId.includes("left")) return `http://${host}:5000/video/cctv3`;
+    if (camId.includes("4") || camId.includes("right")) return `http://${host}:5000/video/cctv4`;
+    return `http://${host}:5000/video/composite`;
   }, [camera.camera_id]);
 
   const resolvedStreamUrl = useMemo(() => {
@@ -112,7 +169,9 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       target = camera.stream_url;
     }
     if (typeof window !== "undefined" && target.includes("localhost:5000")) {
-      const hostname = window.location.hostname || "localhost";
+      const hostname = (window.location.hostname && window.location.hostname !== "localhost")
+        ? window.location.hostname
+        : "127.0.0.1";
       return target.replace("localhost", hostname);
     }
     return target;
@@ -137,12 +196,10 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     if (camId.includes("1") || camId.includes("gate") || camId === "cam_00") endpoint = "cctv1";
     else if (camId.includes("3") || camId.includes("left") || camId === "cam_02") endpoint = "cctv3";
     else if (camId.includes("4") || camId.includes("right") || camId === "cam_03") endpoint = "cctv4";
-    let base = `http://localhost:5000/snapshot/${endpoint}`;
-    if (typeof window !== "undefined" && base.includes("localhost:5000")) {
-      const hostname = window.location.hostname || "localhost";
-      base = base.replace("localhost", hostname);
-    }
-    return `${base}?t=${snapshotTimestamp}`;
+    const host = (typeof window !== "undefined" && window.location.hostname && window.location.hostname !== "localhost")
+      ? window.location.hostname
+      : "127.0.0.1";
+    return `http://${host}:5000/snapshot/${endpoint}?t=${snapshotTimestamp}`;
   }, [camera.camera_id, snapshotTimestamp]);
 
   // When camera stream URL or status updates (e.g. user clicked Save & Connect in modal), reset error & reconnect
@@ -516,7 +573,10 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       )}
 
       {/* Video Canvas Container (Strict 16:9 box with zero border overflow) */}
-      <div className="relative w-full aspect-video bg-[#05080E] flex items-center justify-center overflow-hidden rounded-none border-0 select-none">
+      <div
+        ref={containerRef}
+        className="relative w-full aspect-video bg-[#05080E] flex items-center justify-center overflow-hidden rounded-none border-0 select-none"
+      >
         {isOffline ? (
           <div className="text-center p-6 space-y-2.5">
             <WifiOff className="w-10 h-10 text-slate-600 mx-auto animate-pulse" />
@@ -558,11 +618,15 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
             {/* Background Stream Feed Image (Fit precisely inside container, aspect preserved, zero overflow) */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
+              ref={imgRef}
               key={`${resolvedStreamUrl}-${useSnapshotMode ? "snap" : "mjpeg"}-${streamKey}`}
               src={showFallbackSim ? resolvedStreamUrl : useSnapshotMode ? snapshotUrl : resolvedStreamUrl}
               alt={camera.name}
               className="w-full h-full object-contain block max-w-full max-h-full select-none"
-              onLoad={() => setStreamError(false)}
+              onLoad={() => {
+                setStreamError(false);
+                updateVideoRect();
+              }}
               onError={() => {
                 if (!showFallbackSim) {
                   if (!useSnapshotMode) {
@@ -589,9 +653,17 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
               </div>
             )}
 
-            {/* AI Bounding Boxes & Tracking Layer */}
+            {/* AI Bounding Boxes & Tracking Layer (Pixel-matched to visible video stream) */}
             {showOverlay && (
-              <div className="absolute inset-0 pointer-events-none">
+              <div
+                className="absolute pointer-events-none overflow-hidden"
+                style={{
+                  left: `${videoRect.left}%`,
+                  top: `${videoRect.top}%`,
+                  width: `${videoRect.width}%`,
+                  height: `${videoRect.height}%`,
+                }}
+              >
                 {/* Fire Overlay if active */}
                 {hasFireHazard && (
                   <div className="absolute top-1/3 left-1/4 w-48 h-36 border-2 border-red-500 bg-red-600/25 rounded animate-pulse">
@@ -614,8 +686,16 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                 {zoneWorkers.map((worker) => {
                   if (!worker.bbox) return null;
                   const isViolation = Object.values(worker.ppe).includes("FAIL");
-                  const isNearTop = (worker.bbox.y ?? 0) < 8;
-                  const isNearBottom = ((worker.bbox.y ?? 0) + (worker.bbox.height ?? 0)) > 90;
+
+                  // Strictly clip coordinates within [0, 100]% bounds to prevent overflowing
+                  const rawX = Math.max(0, Math.min(100, worker.bbox.x ?? 0));
+                  const rawY = Math.max(0, Math.min(100, worker.bbox.y ?? 0));
+                  const rawW = Math.max(1, Math.min(100 - rawX, worker.bbox.width ?? 0));
+                  const rawH = Math.max(1, Math.min(100 - rawY, worker.bbox.height ?? 0));
+
+                  // Determine tag placement: inside box if within 14% of top or 86% of bottom
+                  const isNearTop = rawY < 14;
+                  const isNearBottom = (rawY + rawH) > 86;
 
                   return (
                     <div
@@ -627,28 +707,28 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                           : "border-blue-400 bg-blue-500/10"
                       )}
                       style={{
-                        top: `${worker.bbox.y}%`,
-                        left: `${worker.bbox.x}%`,
-                        width: `${worker.bbox.width}%`,
-                        height: `${worker.bbox.height}%`,
+                        top: `${rawY}%`,
+                        left: `${rawX}%`,
+                        width: `${rawW}%`,
+                        height: `${rawH}%`,
                       }}
                     >
                       {/* Worker Tracker Header Tag (Clamped inside box if near top border) */}
                       <div
                         className={cn(
-                          "absolute text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap flex items-center gap-1 shadow-sm z-10",
+                          "absolute text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap flex items-center gap-1 shadow-sm z-10 max-w-[calc(100%-8px)] truncate",
                           isNearTop ? "top-1 left-1" : "-top-6 left-0",
                           isViolation ? "bg-amber-500 text-slate-950" : "bg-blue-600 text-white"
                         )}
                       >
-                        <HardHat className="w-3 h-3" />
-                        <span>{worker.worker_track_id} ({((worker.confidence ?? 0.88) * 100).toFixed(0)}%)</span>
+                        <HardHat className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{worker.worker_track_id} ({((worker.confidence ?? 0.88) * 100).toFixed(0)}%)</span>
                       </div>
 
                       {/* PPE Inspection Tag at bottom (Clamped inside box if near bottom border) */}
                       <div
                         className={cn(
-                          "absolute flex gap-1 flex-wrap z-10",
+                          "absolute flex gap-1 flex-wrap z-10 max-w-[calc(100%-8px)]",
                           isNearBottom ? "bottom-1 left-1" : "-bottom-6 left-0"
                         )}
                       >
@@ -704,6 +784,44 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
                         >
                           F: {worker.ppe.safety_shoes}
                         </span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Tightened Helmet Inspection Bounding Box if available */}
+                {zoneWorkers.map((worker) => {
+                  if (!worker.helmet_bbox) return null;
+                  const hx = Math.max(0, Math.min(100, worker.helmet_bbox.x ?? 0));
+                  const hy = Math.max(0, Math.min(100, worker.helmet_bbox.y ?? 0));
+                  const hw = Math.max(1, Math.min(100 - hx, worker.helmet_bbox.width ?? 0));
+                  const hh = Math.max(1, Math.min(100 - hy, worker.helmet_bbox.height ?? 0));
+                  const isPass = worker.ppe.helmet === "PASS";
+
+                  return (
+                    <div
+                      key={`helmet-${worker.worker_track_id}`}
+                      className={cn(
+                        "absolute rounded border-2 transition-all pointer-events-none",
+                        isPass
+                          ? "border-emerald-400 bg-emerald-500/15 shadow-sm shadow-emerald-500/20"
+                          : "border-red-500 bg-red-500/15 shadow-sm shadow-red-500/20"
+                      )}
+                      style={{
+                        top: `${hy}%`,
+                        left: `${hx}%`,
+                        width: `${hw}%`,
+                        height: `${hh}%`,
+                      }}
+                    >
+                      <div
+                        className={cn(
+                          "absolute text-[9px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow-sm z-10 max-w-[calc(100%-4px)] truncate",
+                          hy < 12 ? "top-1 left-1" : "-top-5 left-0",
+                          isPass ? "bg-emerald-600 text-white" : "bg-red-600 text-white"
+                        )}
+                      >
+                        {isPass ? "Helmet Detected" : "Helmet Not Detected"}
                       </div>
                     </div>
                   );

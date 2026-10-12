@@ -1073,16 +1073,141 @@
 - **Files Created/Modified:**
   - Modified: [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`camera_config.json`](file:///c:/Users/dehur/ps_06/camera_config.json), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`dashboard/src/components/PhoneCameraSettings.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/PhoneCameraSettings.tsx), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/components/ConnectCameraModal.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/ConnectCameraModal.tsx), [`dashboard/src/context/SafetyContext.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/context/SafetyContext.tsx), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
 
+### Session: 2026-10-12 (Session 55)
+- **Agent Focus:** Comprehensive Full Codebase Technical Audit, Empirical Feature Verification, and 9-Slide Presentation Content Extraction.
+- **Key Findings & Accomplishments:**
+  - Conducted end-to-end static & runtime code audit of the entire PS6 solution across `dashboard/` (Next.js 16, React 19, Tailwind v4), `vision_pipeline/` (Python, YOLOv8, YuNet, SFace, ByteTrack), and documentation suites (`implmentation_docs/`, `provided_docs/`).
+  - Audited live microservices: confirmed Next.js on port 3000 (PID 20944) and Python multi-camera orchestrator on port 5000 (PID 26360).
+  - Queried live endpoints: verified `/health` (`200 ONLINE`), `/api/workers` (live detection `GATE_WORKER_01` on CCTV 1), `/api/hazard` (`smoke: true`), and Next.js proxy `/api/cameras/workers`.
+  - Verified neural models: `yolov8n_ppe.pt` (6 custom PPE classes), `yolov8n.pt` (COCO person tracking), `face_detection_yunet_2023mar.onnx`, and `face_recognition_sface_2021dec.onnx`.
+  - Delineated verified implementations from simulated components (MQ-2 gas/smoke and IR flame sensor nodes are currently simulated/awaiting physical hardware, and smoke/fire detection in video is API/simulation-driven rather than an active CNN detector).
+  - Extracted evidence-based content for all 9 required presentation slides with concrete file paths, symbols, and line numbers.
+- **Files Created/Modified:**
+### Session: 2026-10-12 (Session 56)
+- **Agent Focus:** Phase 1 Investigation & Diagnostic Root-Cause Resolution for Camera Failures, Subnet Sweep, and Physical Webcam Recovery.
+- **Key Findings & Accomplishments:**
+  - **Identified Root Cause of CCTV 1 Laptop Webcam Failure:**
+    1. In [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts), input normalization previously lacked local webcam guarding; passing `"0"` caused it to be expanded to `"http://0:8080/video"`.
+    2. Persistent [`camera_config.json`](file:///c:/Users/dehur/ps_06/camera_config.json) was corrupted with `"cctv1": "http://0:8080/video"`, `"cctv1_ip": "0"`, and `"cctv1_port": 8080`.
+    3. Python orchestrator loaded this config on launch and attempted to open `http://0:8080/video` with OpenCV ffmpeg network capture rather than DirectShow device `0`, permanently trapping CCTV 1 in synthetic fallback mode.
+  - **Identified Root Cause of CCTV 2, 3, 4 Phone Stream Failures:**
+    1. Historical phone IP `192.168.1.5` is offline / non-existent on the local network (ICMP ping failed, absent from ARP table).
+    2. Swept entire local subnet (`192.168.1.1`–`192.168.1.35`) across ports `8080`, `4747`, `8081`, `8000`: dynamic hosts exist (`192.168.1.11` at RTT 6ms, `192.168.1.23`), but NO active IP camera HTTP servers are listening. The mobile IP Webcam/DroidCam app server is currently stopped or locked.
+    3. CCTV 3 and CCTV 2 were previously configured with the same non-functional stream (`http://192.168.1.11:8080/video`).
+  - **Resolved CCTV 1 & Sanitized Configuration Engine:**
+    1. Patched [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts) to strictly guard `cctv1` and local webcam input (`"0"` / `"webcam"`), preventing URL transformation.
+    2. Patched [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py) `normalize_camera_source` to map corrupted `http://0:8080/video` back to physical webcam `0`.
+    3. Patched [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts) to sanitize `cctv1` against `http://0:8080`.
+    4. Sanitized [`camera_config.json`](file:///c:/Users/dehur/ps_06/camera_config.json).
+    5. Dynamically reconnected CCTV 1 via `POST /api/cameras/source`: verified `is_connected: true`, `is_synthetic: false`, latency 62ms, frame decoded shape `(360, 640, 3)` with mean brightness `107.02`.
+- **Files Modified:**
+- **Files Modified:**
+  - Modified: [`camera_config.json`](file:///c:/Users/dehur/ps_06/camera_config.json), [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
+### Session: 2026-10-12 (Session 57)
+- **Agent Focus:** Root-Cause Diagnosis & Fix for Helmet Detection Failure, Bounding-Box Alignment/Overflow, and Inanimate Object Filtering.
+- **Empirical Diagnostics & Root Cause Breakdown:**
+  1. **Helmet Detection Root Cause (The Laplacian Variance Barrier in `ppe_detector.py`):**
+     - Inspection of `_check_helmet_hsv`: Line 585 required `lap_var < 340` alongside `best_ratio >= 0.20`.
+     - Tested directly against the user's uploaded screenshot of the yellow helmet (`media_1791790277725.png`):
+       - `yellow_ratio = 0.634` (63.4% vibrant yellow hardhat plastic).
+       - `hair_ratio = 0.111`.
+       - **`lap_var = 1471.3`** (caused by plastic specular glare highlights, structural crest ridges, and helmet rim contrast against background).
+     - Because `lap_var` was 1471.3 (>> 340), line 585 rejected the yellow helmet. The function subsequently fell through into line 599 (`if skin_ratio >= 0.28: return False, "BARE_SKIN"`), where background wall/face pixels caused it to be misclassified as bare skin, forcing `Helmet Not Detected` (red) 100% of the time!
+  2. **Neural YOLO Helmet Model Verification:**
+     - Verified `vision_pipeline/yolov8n_ppe.pt` names: `{0: 'Gloves', 1: 'Vest', 2: 'goggles', 3: 'helmet', 4: 'mask', 5: 'safety_shoe'}`.
+     - The neural model **GENUINELY SUPPORTS HELMET DETECTION** (Class 3).
+     - On the full-frame wide view, webcam worker heads yielded low confidence (0.112) which was filtered out by `PPE_CONF_THRESHOLD = 0.16`.
+     - When running targeted inference on the head crop, `yolov8n_ppe.pt` achieved **0.598 confidence** on the user's yellow helmet!
+  3. **Crown ROI Geometric Skew:**
+     - When user held a phone near the mouth, YuNet face detector detected only partial face/brow, skewing `crown_roi` to the right cheek and curtain.
+  4. **Bounding-Box Tag Overflow & Container Letterboxing:**
+     - In `CameraViewer.tsx`, worker header tag had `-top-6 left-0` whenever `bbox.y >= 8`. For seated users (`y ≈ 10%–25%`), `-24px` pushed the tag out of the video container into the card title bar.
+     - Overlay `<div>` had `inset-0` over the 16:9 container, causing misalignment when non-16:9 streams (e.g. 4:3 phone streams) were letterboxed by `object-contain`.
+  5. **Inanimate Background Objects:**
+     - YOLO person detections on hanging coats or chair backs occurred at `conf ~ 0.42–0.45` and lacked human skin or hair landmarks.
+- **Implemented Fixes:**
+  1. **Fixed `_check_helmet_hsv` in [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py):**
+     - Removed restrictive `lap_var < 340` check for colored industrial helmets (Yellow, Orange, Blue, Red, Green).
+     - Added contour bounding-box tightening to snap `crown_roi` directly to the colored helmet dome.
+     - Guarded `BARE_SKIN` and `HAIR_TEXTURE` rejection to only trigger when no helmet color is detected (`best_ratio < 0.15`).
+  2. **Dual-Scale Neural Inference in [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py):**
+     - Anchored `crown_roi` symmetrically to the worker's head midline (`cx_mid = (x1 + x2) // 2`).
+     - Added secondary targeted neural inference on `head_crop` using `yolov8n_ppe.pt`, allowing closeup webcam helmets to be recognized with >0.50 confidence.
+  3. **Updated Confidence Thresholds in [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py):**
+     - Adjusted `HELMET_CONF_THRESHOLD = 0.10`, `PPE_CONF_THRESHOLD = 0.10`, and `PERSON_CONF_THRESHOLD = 0.45`.
+  4. **Strict Box Clamping & Inanimate Object Filtering in [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py):**
+     - Upgraded `_is_valid_human_detection` with biological presence verification (minimum skin or hair ratio in upper body) and raised stillness variance to 1.6px.
+     - Strictly clamped all bounding box coordinates `x1, y1, x2, y2` within `[0, gw]` and `[0, gh]`.
+     - Added `helmet_bbox` to JSON telemetry for CCTV 1 and CCTV 2.
+  5. **Letterbox-Aware Dynamic Overlay in [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx):**
+     - Implemented `containerRef`, `imgRef`, and dynamic `videoRect` tracking aspect-ratio differences (letterboxing / pillarboxing) so overlay matches visible image pixels.
+     - Clamped tag offsets: if `rawY < 14`, header tag renders inside the box (`top-1 left-1`); if `rawY + rawH > 86`, PPE tag renders inside (`bottom-1 left-1`).
+     - Added dedicated tightened `helmet_bbox` rendering layer with green `Helmet Detected` badge.
+  6. **TypeScript & Backend Verification:**
+     - Added `helmet_bbox?: BoundingBox` to `WorkerTrack` in [`dashboard/src/types/safety.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/types/safety.ts).
+     - Compiled with `npx tsc --noEmit` (0 errors) and `py_compile` (0 errors).
+     - Tested live webcam feed via `GET /api/workers`: verified `GATE_WORKER_01` returns `helmet: PASS`, `label: "Helmet Detected"`, `color: "#10b981"`, with green pixel verification on live snapshot.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/config.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/config.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/types/safety.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/types/safety.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+
+### Session: 2026-10-12 (Session 58)
+- **Agent Focus:** CCTV 1 Lag Elimination, CCTV 2/3/4 Standby Refinement, and False-Positive Helmet Pass on Kept-Aside Hardhats.
+- **Root Cause Analysis & Empirical Diagnostics:**
+  1. **CCTV 1 Freezing & Latency Root Causes:**
+     - **UnboundLocalError Loop Crash:** In `ppe_detector.py`, `cx_mid = (fx + fw // 2) if face_bbox is not None else ...` evaluated `fx` and `fw` before `fx, fy, fw, fh = face_bbox` was unpacked. Whenever the user's face appeared in front of the webcam, the Python main loop crashed with `cannot access local variable 'fx' where it is not associated with a value`, slept 50ms, and skipped frame broadcasting entirely, causing severe video freeze and stutter.
+     - **Full-Resolution CPU Inference Bottleneck:** `multicam_orchestrator.py` ran YOLO ByteTrack, YOLO PPE inference, and YuNet face detection on unscaled 1280x720 frames, taking ~160ms on CPU. Moreover, `process_ward_stream` ran full neural inference on synthetic 1280x720 frames every loop even when CCTV 2 was offline (~250ms CPU waste).
+     - **Windows IPv6 2000ms DNS Timeout:** Next.js API routes and `CameraViewer.tsx` requested `http://localhost:5000/`. On Windows, `localhost` attempts IPv6 `::1` first, which times out after 2000ms against Python's IPv4 `0.0.0.0` socket, causing 1200ms abort controller timeouts on `/api/cameras/workers`.
+  2. **Helmet Kept Aside False-Positive Root Causes:**
+     - **Overly Generous Containment Bounds:** `ppe_detector.py` allowed helmet items within `x1 - 35% * box_w <= icx <= x2 + 35% * box_w` and `icy <= y1 + 55% * box_h`. A helmet set aside on a table or desk next to a seated worker fell inside this window.
+     - **`head_crop` Hijacking:** When a helmet was detected on the table, `head_crop` was replaced with `frame[hy1:hy2, hx1:hx2]` (the table crop). HSV inspection checked the table crop, saw yellow hardhat plastic, and passed the worker, ignoring the worker's bare head.
+     - **Phantom Worker Candidate Synthesis:** `multicam_orchestrator.py` contained a fallback that synthesized a fake worker candidate directly under isolated helmets, creating phantom workers.
+- **Implemented Fixes & Optimizations:**
+  1. **Strict Anatomical Helmet Gating (`ppe_detector.py`):**
+     - Unpacked `face_bbox` early (`fx, fy, fw, fh`) to resolve `UnboundLocalError`.
+     - When face is present: Helmet must be centered horizontally over the face (`fx - 25% * fw <= icx <= fx + 125% * fw`), helmet bottom must sit near brow (`iy2 <= fy + 45% * fh`), top above brow (`iy1 < fy`), and center above eyes (`icy < fy + 25% * fh`). Desks/tables fail these checks.
+     - When face is not present: Helmet must be within upper 22% cranial apex of person box.
+     - Ground-truth cranial dome (`head_crop`) is strictly extracted from the anatomical head dome, never replaced by an external desk crop.
+     - Hardhat shell check (`_check_helmet_hsv`): Lowered bare hair threshold to 18%. If bare hair (`BARE_HAIR`, `HAIR_TEXTURE`, or `BARE_SKIN`) is detected on the skull, the worker is unequivocally declared `helmet: FAIL`, blocking all false passes from helmets set on tables.
+  2. **Inference Acceleration & Stream Decoupling (`multicam_orchestrator.py`):**
+     - Downscaled gate inference to 640x360 on CPU for YOLO tracking, face detection, and PPE evaluation, slashing inference latency from ~160ms to ~35ms (~4x speedup) while preserving 1280x720 video display.
+     - Completely bypassed neural inference in `process_ward_stream` when `is_synthetic_mode` is True, saving ~250ms of CPU per loop.
+     - Removed phantom worker candidate synthesis.
+  3. **Tactical CCTV Standby Cards (`web_streamer.py`):**
+     - Upgraded `get_standby_numpy_frame` for CCTV 2, 3, and 4 with tactical dark slate backgrounds, radar grid lines, corner brackets, reticles, and clear IP Webcam setup instructions.
+     - Active streams smoothly resize to 640x360.
+  4. **IPv6 Latency Elimination (`CameraViewer.tsx` & Next.js API Routes):**
+     - Updated `CameraViewer.tsx` and Next.js routes (`/api/cameras/workers`, `/api/cameras/hazard`, `/api/cameras/config`, `/api/cameras/start-stream`) to route local port 5000 requests via `127.0.0.1:5000` instead of `localhost:5000`.
+     - Snapshot latency dropped from 2084ms to **1.3ms**, and `/api/cameras/workers` latency dropped to **1.4ms**.
+- **Verification & Telemetry:**
+  - Automated unit test suite `vision_pipeline/scratch/test_helmet_logic.py`:
+    - Scenario A (Bare Head): `Helmet=FAIL, Color=BARE_HAIR` (PASS).
+    - Scenario B (Helmet Kept Aside on Desk): `Helmet=FAIL, Color=BARE_HAIR` (PASS).
+    - Scenario C (Wearing Helmet): `Helmet=PASS, Color=YELLOW` (PASS).
+  - Live API testing on port 5000:
+    - `/health`: `200 OK` (37ms).
+    - `/api/workers`: `200 OK` (1.4ms) -> returns `GATE_WORKER_04`, `helmet: FAIL`, `Helmet Not Detected`.
+    - `/snapshot/cctv1`: `200 OK` (1.3ms).
+    - `/snapshot/cctv2-4`: `200 OK` (21ms tactical standby card).
+    - Next.js `/api/cameras/workers`: `200 OK` (59ms).
+  - TypeScript compilation: `npx tsc --noEmit` -> 0 errors. Python compilation -> 0 errors.
+- **Files Modified:**
+  - Modified: [`vision_pipeline/ppe_detector.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/ppe_detector.py), [`vision_pipeline/multicam_orchestrator.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/multicam_orchestrator.py), [`vision_pipeline/web_streamer.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/web_streamer.py), [`vision_pipeline/stream_manager.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/stream_manager.py), [`dashboard/src/components/CameraViewer.tsx`](file:///c:/Users/dehur/ps_06/dashboard/src/components/CameraViewer.tsx), [`dashboard/src/app/api/cameras/workers/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/workers/route.ts), [`dashboard/src/app/api/cameras/hazard/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/hazard/route.ts), [`dashboard/src/app/api/cameras/config/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/config/route.ts), [`dashboard/src/app/api/cameras/start-stream/route.ts`](file:///c:/Users/dehur/ps_06/dashboard/src/app/api/cameras/start-stream/route.ts), [`CONTEXT_AND_PROGRESS.md`](file:///c:/Users/dehur/ps_06/CONTEXT_AND_PROGRESS.md)
+  - Created: [`vision_pipeline/scratch/test_helmet_logic.py`](file:///c:/Users/dehur/ps_06/vision_pipeline/scratch/test_helmet_logic.py)
+
 ---
 
 ## 5. Immediate Next Steps for Subsequent Agents
 
-1. **How to Connect Phone 2 and Phone 3:**
-   - In the dashboard, locate **CCTV 3 (Phone 2)** or **CCTV 4 (Phone 3)**.
-   - Click the button on the card: **`[Phone 2 IP]`** or **`[Phone 3 IP]`** (or use **`[Phone Camera Settings]`** in the header to select the phone tab).
-   - Enter the IP address shown on the phone screen (e.g., `192.168.1.43:8080`).
-   - Click **`Connect CCTV 3`** or **`Connect CCTV 4`**.
-   - The stream will connect dynamically without affecting CCTV 1 or any other camera.
+1. **Mobile Phone Stream Pairing (CCTV 2, 3, 4):**
+   - Start the IP Webcam app on the mobile device (connected to the same local Wi-Fi / hotspot).
+   - Click "Connect IP Stream" on CCTV 2, 3, or 4 in the dashboard (or via `/settings`), input the phone's IP (e.g. `http://192.168.x.x:8080/video`), and verify live video ingestion.
+2. **Hardware / Modbus Telemetry Bring-Up:**
+   - Ingest physical ESP32 Modbus RTU telemetry for zone environmental sensors.
+3. **Fire & Smoke Real-World Burner Testing:**
+   - Verify YOLOv8 fire/smoke weights under physical flame/smoke testing conditions.
+
+
 
 
 

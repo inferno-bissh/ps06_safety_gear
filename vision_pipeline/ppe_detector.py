@@ -130,6 +130,11 @@ class WorkerPPEEvaluator:
         shoes_neural = False
         bare_hands_neural = False
 
+        # Unpack face bounding box early if present to prevent UnboundLocalError
+        fx, fy, fw, fh = (None, None, None, None)
+        if face_bbox is not None:
+            fx, fy, fw, fh = map(int, face_bbox)
+
         if frame_ppe_items:
             for item in frame_ppe_items:
                 lbl = item["label"].lower()
@@ -138,13 +143,29 @@ class WorkerPPEEvaluator:
                 icy = (iy1 + iy2) / 2.0
                 iconf = item["conf"]
 
-                # Horizontal alignment check (item center within worker column + 35% margin)
-                if not (x1 - max(30, int(box_w * 0.35)) <= icx <= x2 + max(30, int(box_w * 0.35))):
+                # Horizontal alignment check (item center within worker column + 20% margin)
+                if not (x1 - max(20, int(box_w * 0.20)) <= icx <= x2 + max(20, int(box_w * 0.20))):
                     continue
 
-                # Helmet: center within upper 55% of worker box or directly above head
+                # Helmet: MUST be strictly positioned at the anatomical cranial apex (on the head, above brow)
+                # A helmet set aside on a desk, table, lap, or held at waist/chest height is NOT on the worker's head!
                 if "helmet" in lbl:
-                    if (y1 - max(80, int(box_h * 0.45))) <= icy <= (y1 + max(80, int(box_h * 0.55))):
+                    is_on_head = False
+                    if face_bbox is not None:
+                        # Face detected: Helmet must sit directly over the face horizontally,
+                        # top must be above brow, bottom must not reach below mid-forehead, and center above eyes
+                        face_horiz = (fx - int(fw * 0.25) <= icx <= fx + fw + int(fw * 0.25))
+                        face_vert = (iy1 < fy and iy2 <= fy + int(fh * 0.45) and icy < fy + int(fh * 0.25))
+                        if face_horiz and face_vert:
+                            is_on_head = True
+                    else:
+                        # No face detected: Helmet center must be strictly in the upper 22% apex of person box
+                        apex_horiz = (x1 + int(box_w * 0.15) <= icx <= x2 - int(box_w * 0.15))
+                        apex_vert = (y1 - max(60, int(box_h * 0.25)) <= icy <= y1 + int(box_h * 0.22) and iy2 <= y1 + int(box_h * 0.35))
+                        if apex_horiz and apex_vert:
+                            is_on_head = True
+
+                    if is_on_head:
                         helmet_neural = True
                         if iconf > helmet_neural_conf:
                             helmet_neural_conf = iconf
@@ -197,7 +218,7 @@ class WorkerPPEEvaluator:
         worker_h_pct = box_h / max(1, h)
         worker_bottom_pct = y2 / max(1, h)
 
-        # 2. Adaptive Posture Crops & Precise Skull Crown ROI
+        # 2. Adaptive Posture Crops & Ground-Truth Anatomical Skull Dome Extraction
         if aspect_ratio < 1.6:
             head_h_ratio = 0.35
             torso_y1_ratio = 0.30
@@ -207,33 +228,56 @@ class WorkerPPEEvaluator:
             torso_y1_ratio = 0.22
             torso_y2_ratio = 0.68
 
-        # Target skull crown ROI:
-        # Priority 1: If Neural YOLO located a helmet bounding box on this worker, inspect that candidate region
-        if helmet_neural_box is not None:
-            hx1, hy1, hx2, hy2 = helmet_neural_box
-            crown_roi = (hx1, hy1, hx2, hy2)
-            head_crop = frame[hy1:hy2, hx1:hx2]
-        # Priority 2: Use face_bbox anchor if available (covers apex of hardhat dome directly above brow)
-        elif face_bbox is not None:
-            fx, fy, fw, fh = face_bbox
-            sx1 = max(0, fx - int(fw * 0.15))
-            sx2 = min(w, fx + fw + int(fw * 0.15))
-            sy1 = max(0, fy - int(fh * 1.15))
-            sy2 = max(0, fy - int(fh * 0.05))
-            if sy2 <= sy1:
-                sy2 = fy
-                sy1 = max(0, fy - int(fh * 0.85))
-            head_crop = frame[sy1:sy2, sx1:sx2]
-            crown_roi = (sx1, sy1, sx2, sy2)
-        # Priority 3: Worker aspect ratio bounding box estimate
+        # Always extract cranial skull dome strictly from the worker's true anatomical head!
+        # NEVER substitute this with a desk crop or candidate item placed aside.
+        if face_bbox is not None:
+            cx_mid = fx + fw // 2
+            dome_w = max(int(box_w * 0.55), fw + int(fw * 0.40))
+            sx1 = max(0, cx_mid - dome_w // 2)
+            sx2 = min(w, cx_mid + dome_w // 2)
+            sy1 = max(0, min(y1, fy - int(fh * 1.25)))
+            sy2 = min(h, fy + int(fh * 0.15))
+            if sy2 <= sy1 + 20:
+                sy2 = min(h, sy1 + max(35, int(fh * 1.10)))
         else:
-            head_h = max(20, int(box_h * head_h_ratio))
-            sx1 = max(0, x1 + int(box_w * 0.20))
-            sx2 = min(w, x2 - int(box_w * 0.20))
-            sy1 = y1
-            sy2 = min(h, y1 + int(head_h * 0.55))
-            head_crop = frame[sy1:sy2, sx1:sx2]
-            crown_roi = (sx1, sy1, sx2, sy2)
+            cx_mid = (x1 + x2) // 2
+            dome_w = max(50, int(box_w * 0.55))
+            sx1 = max(0, cx_mid - dome_w // 2)
+            sx2 = min(w, cx_mid + dome_w // 2)
+            head_h = max(25, int(box_h * head_h_ratio))
+            sy1 = max(0, y1)
+            sy2 = min(h, y1 + int(head_h * 0.85))
+
+        head_crop = frame[sy1:sy2, sx1:sx2]
+        crown_roi = (sx1, sy1, sx2, sy2)
+
+        # If a valid on-head helmet was detected by neural YOLO, anchor crown_roi to that box
+        if helmet_neural_box is not None:
+            crown_roi = helmet_neural_box
+
+        # Secondary targeted neural YOLO inference on head crop (vital for closeup webcam workers)
+        if not helmet_neural and self.ppe_model is not None and head_crop.size > 0:
+            try:
+                h_res = self.ppe_model(head_crop, conf=0.15, verbose=False)
+                if h_res and len(h_res[0].boxes) > 0:
+                    for h_b, h_c, h_s in zip(
+                        h_res[0].boxes.xyxy.cpu().numpy().astype(int),
+                        h_res[0].boxes.cls.cpu().numpy().astype(int),
+                        h_res[0].boxes.conf.cpu().numpy()
+                    ):
+                        lbl_name = self.ppe_model.names.get(h_c, "").lower()
+                        if "helmet" in lbl_name:
+                            helmet_neural = True
+                            if float(h_s) > helmet_neural_conf:
+                                helmet_neural_conf = float(h_s)
+                                gx1 = crown_roi[0] + h_b[0]
+                                gy1 = crown_roi[1] + h_b[1]
+                                gx2 = crown_roi[0] + h_b[2]
+                                gy2 = crown_roi[1] + h_b[3]
+                                helmet_neural_box = (gx1, gy1, gx2, gy2)
+                                crown_roi = helmet_neural_box
+            except Exception:
+                pass
 
         torso_y1 = y1 + int(box_h * torso_y1_ratio)
         torso_y2 = y1 + int(box_h * torso_y2_ratio)
@@ -252,10 +296,17 @@ class WorkerPPEEvaluator:
         vest_hsv_pass, vest_hsv_color, vest_pct = self._check_vest_hsv(torso_crop)
 
         # 3. Hybrid Fusion: Neural YOLO + Color/Dome Shell Classification
+        # Check if bare hair or bare skin is detected on the person's cranial skull:
+        is_bare_head = (helmet_hsv_color in ["BARE_HAIR", "HAIR_TEXTURE", "BARE_SKIN"])
+
         # HELMET EVALUATION:
-        # Passes if hardhat shell/color confirms helmet OR Neural YOLO detects helmet!
-        if helmet_hsv_pass:
-            if helmet_hsv_color == "WHITE" and not helmet_neural:
+        # A worker NEVER passes helmet compliance if their cranial skull dome has bare hair or bare skin!
+        if is_bare_head:
+            helmet_pass = False
+            helmet_source = "NONE"
+            helmet_color = helmet_hsv_color
+        elif helmet_hsv_pass:
+            if helmet_hsv_color == "WHITE" and not helmet_neural and white_pct < 0.35:
                 # White background wall/ceiling without neural helmet confirmation is rejected
                 helmet_pass = False
                 helmet_source = "NONE"
@@ -269,25 +320,18 @@ class WorkerPPEEvaluator:
         elif (
             helmet_neural
             and helmet_neural_conf >= HELMET_CONF_THRESHOLD
-            and helmet_hsv_color not in ["PAPER_BAG", "BARE_HAIR", "HAIR_TEXTURE"]
+            and not is_bare_head
         ):
             # Neural YOLO confirms helmet when bare hair is NOT detected on skull
             helmet_pass = True
             helmet_source = "NEURAL_YOLO"
-            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE", "BARE_SKIN"] else "VERIFIED"
-            if helmet_neural_box is not None:
-                crown_roi = helmet_neural_box
-        elif helmet_neural and helmet_neural_conf >= 0.35 and helmet_hsv_color != "PAPER_BAG":
-            # High neural confidence exception (>= 35%)
-            helmet_pass = True
-            helmet_source = "NEURAL_YOLO"
-            helmet_color = "VERIFIED"
+            helmet_color = helmet_hsv_color if helmet_hsv_color not in ["NONE"] else "VERIFIED"
             if helmet_neural_box is not None:
                 crown_roi = helmet_neural_box
         else:
             helmet_pass = False
             helmet_source = "NONE"
-            helmet_color = helmet_hsv_color if helmet_hsv_color in ["BARE_HAIR", "HAIR_TEXTURE", "BARE_SKIN"] else "NONE"
+            helmet_color = helmet_hsv_color if is_bare_head else "NONE"
 
         # VEST EVALUATION:
         # Directly passes if Neural YOLO detected Vest OR HSV confirmed high-vis vest!
@@ -577,30 +621,47 @@ class WorkerPPEEvaluator:
         mean_h = float(np.mean(crown_hsv[:, :, 0]))
         mean_s = float(np.mean(crown_hsv[:, :, 1]))
         mean_v = float(np.mean(crown_hsv[:, :, 2]))
-        if kraft_ratio >= 0.32 or ((12 <= mean_h <= 20) and (75 <= mean_s <= 160) and (95 <= mean_v <= 210)):
+        if best_ratio < 0.25 and (kraft_ratio >= 0.32 or ((12 <= mean_h <= 20) and (75 <= mean_s <= 150) and (95 <= mean_v <= 210))):
             return False, "PAPER_BAG", white_ratio, colored_ratio, crown_roi_global
 
         # 5. Authentic Colored Hardhat (Yellow, Orange, Blue, Red, Green):
-        # Requires at least 20% coverage of skull dome, strictly exceeding hair ratio, and plastic smoothness
-        if best_color != "WHITE" and best_ratio >= 0.20 and best_ratio > hair_ratio and lap_var < 340:
+        # Requires at least 18% coverage of skull dome, strictly exceeding hair ratio
+        if best_color in ["YELLOW", "ORANGE", "BLUE", "RED", "GREEN"] and best_ratio >= 0.18 and best_ratio > hair_ratio:
+            target_mask = {
+                "YELLOW": mask_yellow,
+                "ORANGE": mask_orange,
+                "BLUE": mask_blue,
+                "RED": mask_red,
+                "GREEN": mask_green,
+            }[best_color]
+            contours, _ = cv2.findContours(target_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                c_max = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(c_max) > 100:
+                    cx, cy, cw, ch = cv2.boundingRect(c_max)
+                    gx1 = crown_roi_global[0] + cx
+                    gy1 = crown_roi_global[1] + cy
+                    gx2 = gx1 + cw
+                    gy2 = gy1 + ch
+                    crown_roi_global = (gx1, gy1, gx2, gy2)
             return True, best_color, white_ratio, colored_ratio, crown_roi_global
 
         # 6. Authentic White Hardhat:
-        # Requires at least 25% solid white plastic coverage, low hair (<20%), and smooth finish (lap_var < 240)
-        if best_color == "WHITE" and white_ratio >= 0.25 and hair_ratio < 0.20 and white_ratio > hair_ratio and lap_var < 240:
+        # Requires at least 25% solid white plastic coverage, low hair (<20%), and white exceeding hair
+        if best_color == "WHITE" and white_ratio >= 0.25 and hair_ratio < 0.20 and white_ratio > hair_ratio:
             return True, "WHITE", white_ratio, colored_ratio, crown_roi_global
 
         # 7. Explicit Bare Hair Rejection:
-        # If dark/brown hair covers 25%+ of skull dome, it is unequivocally bare hair!
-        if hair_ratio >= 0.25:
+        # If dark/brown hair covers 18%+ of skull dome, it is unequivocally bare hair!
+        if hair_ratio >= 0.18:
             return False, "BARE_HAIR", white_ratio, colored_ratio, crown_roi_global
 
         # 8. Explicit Bare Forehead/Skin Rejection:
-        if skin_ratio >= 0.28:
+        if skin_ratio >= 0.28 and best_ratio < 0.15:
             return False, "BARE_SKIN", white_ratio, colored_ratio, crown_roi_global
 
         # 9. Natural Hair Fiber Texture Rejection:
-        if lap_var >= 260 and hair_ratio >= 0.15:
+        if lap_var >= 200 and hair_ratio >= 0.14 and best_ratio < 0.15:
             return False, "HAIR_TEXTURE", white_ratio, colored_ratio, crown_roi_global
 
         return False, "NONE", white_ratio, colored_ratio, crown_roi_global

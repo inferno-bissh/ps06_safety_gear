@@ -163,12 +163,14 @@ class ThreadedCameraStream:
                     except Exception:
                         pass
 
-                synth = generate_synthetic_industrial_frame(1280, 720, step, self.camera_id)
-                with self.lock:
-                    self.latest_frame = synth
-                    self.latest_timestamp = now
-                    self.frame_count += 1
-                time.sleep(1.0 / self.target_fps)
+                # Serve lightweight standby frame without burning CPU on animated gradient rendering
+                if step % 15 == 0 or self.latest_frame is None:
+                    synth = generate_synthetic_industrial_frame(640, 360, 0, self.camera_id)
+                    with self.lock:
+                        self.latest_frame = synth
+                        self.latest_timestamp = now
+                        self.frame_count += 1
+                time.sleep(0.08)
                 continue
 
             # In physical capture mode: read frame

@@ -65,6 +65,7 @@ export interface WorkerTrack {
   ppe: PPEItemStatus;
   confidence: number;
   bbox?: BoundingBox;
+  helmet_bbox?: BoundingBox;
 }
 
 export interface Camera {

@@ -33,6 +33,7 @@ from web_streamer import (
     get_hazard_state,
     set_hazard_state,
     register_camera_callbacks,
+    get_standby_numpy_frame,
 )
 
 CAMERA_CONFIG_FILE = BASE_DIR.parent / "camera_config.json"
@@ -66,6 +67,9 @@ def normalize_camera_source(src, default="0"):
         return default
     if s.isdigit():
         return int(s)
+    # Sanitize corrupted 0-ip endpoints or local aliases back to physical webcam 0
+    if s in ("http://0:8080/video", "http://0:8080", "http://0/video", "webcam", "local"):
+        return 0
     # Never accept recursive localhost:5000 broadcast feeds as camera inputs
     if ":5000" in s:
         return default
@@ -94,7 +98,7 @@ class MultiCameraOrchestrator:
         saved_cfg = load_camera_config()
         if (ward_src == "0" or ward_src == "http://192.168.1.5:8080/video") and "cctv2" in saved_cfg:
             ward_src = saved_cfg["cctv2"]
-        if gate_src == "0" and "cctv1" in saved_cfg and saved_cfg["cctv1"] != "0":
+        if gate_src == "0" and "cctv1" in saved_cfg and saved_cfg["cctv1"] not in ("0", 0, "http://0:8080/video"):
             gate_src = saved_cfg["cctv1"]
         if (cctv3_src is None or cctv3_src == "0") and "cctv3" in saved_cfg and saved_cfg["cctv3"]:
             cctv3_src = saved_cfg["cctv3"]
@@ -351,8 +355,8 @@ class MultiCameraOrchestrator:
 
         # 1. Bounding box size and aspect ratio
         # A seated or standing human in front of camera has aspect ratio in [0.48, 5.0].
-        # Discard extreme horizontal ribbons (ar < 0.48) or tiny edge artifacts (bw < 38 or bh < 55)
-        if bw < 38 or bh < 55 or ar < 0.48 or ar > 5.0:
+        # Discard extreme horizontal ribbons (ar < 0.48) or tiny edge artifacts (bw < 40 or bh < 60)
+        if bw < 40 or bh < 60 or ar < 0.48 or ar > 5.0:
             return False
 
         # 2. Confirmed Human Landmarks (Face, Helmet, or Vest immediately pass)
@@ -362,11 +366,32 @@ class MultiCameraOrchestrator:
             return True
 
         # 3. Confidence gating for unverified candidates (no face, no helmet, no vest)
-        # Background fabric/clothes on hooks typically produce low-confidence noise (< 0.42)
-        if conf < 0.42:
+        # Background fabric/clothes on hooks or chairs produce noise (typically < 0.48)
+        if conf < 0.48:
             return False
 
-        # 4. Motion Dynamics & Stillness Filter:
+        # 4. Human biological presence check (skin or hair in candidate box)
+        h, w = frame.shape[:2]
+        crop_head = frame[max(0, y1):min(h, y1 + int(bh * 0.45)), max(0, x1):min(w, x2)]
+        if crop_head.size > 0:
+            h_ycrcb = cv2.cvtColor(crop_head, cv2.COLOR_BGR2YCrCb)
+            h_hsv = cv2.cvtColor(crop_head, cv2.COLOR_BGR2HSV)
+            m_skin = cv2.bitwise_and(
+                cv2.inRange(h_ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127])),
+                cv2.inRange(h_hsv, np.array([0, 25, 45]), np.array([28, 220, 255]))
+            )
+            m_hair = cv2.bitwise_or(
+                cv2.inRange(h_hsv, np.array([0, 0, 0]), np.array([180, 110, 92])),
+                cv2.inRange(h_hsv, np.array([5, 40, 30]), np.array([25, 140, 110]))
+            )
+            tot = crop_head.shape[0] * crop_head.shape[1]
+            s_ratio = cv2.countNonZero(m_skin) / tot
+            hair_ratio = cv2.countNonZero(m_hair) / tot
+            # If candidate completely lacks skin and hair and safety gear, it is an inanimate object/garment!
+            if s_ratio < 0.02 and hair_ratio < 0.02:
+                return False
+
+        # 5. Motion Dynamics & Stillness Filter:
         # Inanimate objects (clothes on hangers, bags on hooks) are 100% stationary across frames.
         # Real humans (even when sitting still) exhibit micro-motion from breathing and posture.
         track_key = f"{cam_id}_{track_id}"
@@ -376,15 +401,15 @@ class MultiCameraOrchestrator:
         if len(history) > 15:
             history.pop(0)
 
-        # If we have tracked this candidate across 10+ frames:
-        if len(history) >= 10:
+        # If we have tracked this unverified candidate across 8+ frames:
+        if len(history) >= 8:
             xs = [p[0] for p in history]
             ys = [p[1] for p in history]
             std_x = float(np.std(xs))
             std_y = float(np.std(ys))
             total_motion = float(np.sqrt(std_x**2 + std_y**2))
-            # Completely motionless (< 0.85px variance) with NO face and NO safety gear -> stationary hanging garment!
-            if total_motion < 0.85 and conf < 0.70:
+            # Inanimate object stillness check (< 1.6px motion variance on webcam)
+            if total_motion < 1.60 and conf < 0.72:
                 return False
 
         return True
@@ -395,19 +420,29 @@ class MultiCameraOrchestrator:
             return []
 
         now = time.time()
-        # Throttled evaluation interval (~0.12s, 8 FPS) to save CPU while maintaining persistence
+        # Throttled evaluation interval (~0.10s, 10 FPS) to maintain smooth real-time performance
         # Between evaluations, smoothly redraw cached detections on the current frame
-        if (now - self.last_gate_eval_time < 0.12) and len(self.cached_gate_drawings) > 0:
+        if (now - self.last_gate_eval_time < 0.10) and len(self.cached_gate_drawings) > 0:
             self._redraw_gate_overlays(gate_frame, self.cached_gate_drawings)
             return self.cached_gate_workers
 
         self.last_gate_eval_time = now
         gh, gw = gate_frame.shape[:2]
 
+        # High-Speed Inference Rescaling (downscales to 640px wide for ~4x CPU inference speedup)
+        if gw > 640:
+            scale_x = gw / 640.0
+            scale_y = gh / 360.0
+            infer_frame = cv2.resize(gate_frame, (640, 360))
+        else:
+            scale_x = 1.0
+            scale_y = 1.0
+            infer_frame = gate_frame
+
         # 1. Person Tracking with ByteTrack (persistent tracking across frames prevents ID swapping when switching sides)
-        # Using conf=0.38 eliminates low-confidence inanimate object noise (such as hanging bags or coats)
+        # Using conf=PERSON_CONF_THRESHOLD eliminates low-confidence inanimate object noise
         results = self.gate_model.track(
-            gate_frame,
+            infer_frame,
             persist=True,
             classes=[0],
             tracker="bytetrack.yaml",
@@ -427,7 +462,10 @@ class MultiCameraOrchestrator:
 
             # Non-Maximum Suppression and minimum dimension filtering
             for b, t, c in zip(raw_b, raw_t, raw_c):
-                bx1, by1, bx2, by2 = b
+                bx1 = int(b[0] * scale_x)
+                by1 = int(b[1] * scale_y)
+                bx2 = int(b[2] * scale_x)
+                by2 = int(b[3] * scale_y)
                 bw = bx2 - bx1
                 bh = by2 - by1
                 # Discard tiny artifacts under desks, electrical sockets, or edge noise
@@ -446,20 +484,31 @@ class MultiCameraOrchestrator:
                             overlap = True
                             break
                 if not overlap:
-                    boxes.append(b)
+                    boxes.append([bx1, by1, bx2, by2])
                     track_ids.append(t)
                     confidences.append(c)
 
         # 2. Face Detection & Anchor Box Refinement
         faces = None
         if self.face_engine.use_native_sface and self.face_engine.detector:
-            self.face_engine.detector.setInputSize((gw, gh))
-            _, faces = self.face_engine.detector.detect(gate_frame)
+            try:
+                self.face_engine.detector.setInputSize((infer_frame.shape[1], infer_frame.shape[0]))
+                _, raw_faces = self.face_engine.detector.detect(infer_frame)
+                if raw_faces is not None:
+                    faces = []
+                    for f in raw_faces:
+                        fx = int(f[0] * scale_x)
+                        fy = int(f[1] * scale_y)
+                        fw = int(f[2] * scale_x)
+                        fh = int(f[3] * scale_y)
+                        faces.append((fx, fy, fw, fh))
+            except Exception:
+                faces = None
 
         # Extrapolate untracked faces if sitting very close (require genuine face size)
         if faces is not None:
             for f in faces:
-                fx, fy, fw, fh = map(int, f[:4])
+                fx, fy, fw, fh = f[:4]
                 if fw < 35 or fh < 35:
                     continue
                 is_covered = any(
@@ -477,31 +526,16 @@ class MultiCameraOrchestrator:
                     confidences.append(0.85)
 
         # 3. Dedicated Neural YOLO PPE Detection
-        ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(gate_frame)
-
-        # 4. Helmet-Anchored Worker Candidate Fallback:
-        # If user is sitting close to webcam wearing a safety helmet (where COCO person model
-        # or YuNet face detector may be occluded by helmet brim or webcam cropping),
-        # synthesize a worker candidate box around the detected helmet!
-        if ppe_items:
-            for item in ppe_items:
-                if item["label"].lower() == "helmet":
-                    hx1, hy1, hx2, hy2 = item["box"]
-                    is_covered = any(
-                        bx1 <= ((hx1 + hx2) // 2) <= bx2 and by1 <= ((hy1 + hy2) // 2) <= by2
-                        for bx1, by1, bx2, by2 in boxes
-                    )
-                    if not is_covered:
-                        hw = hx2 - hx1
-                        hh = hy2 - hy1
-                        wx1 = max(0, hx1 - int(hw * 0.35))
-                        wy1 = max(0, hy1 - 10)
-                        wx2 = min(gw, hx2 + int(hw * 0.35))
-                        wy2 = min(gh, hy2 + int(hh * 3.5))
-                        new_id = (max(track_ids) + 1) if track_ids else 1
-                        boxes.append([wx1, wy1, wx2, wy2])
-                        track_ids.append(new_id)
-                        confidences.append(float(round(item["conf"], 2)))
+        raw_ppe_items = self.gate_ppe_evaluator.detect_frame_ppe(infer_frame)
+        ppe_items = []
+        if raw_ppe_items:
+            for item in raw_ppe_items:
+                ix1, iy1, ix2, iy2 = item["box"]
+                ppe_items.append({
+                    "label": item["label"],
+                    "conf": item["conf"],
+                    "box": (int(ix1 * scale_x), int(iy1 * scale_y), int(ix2 * scale_x), int(iy2 * scale_y)),
+                })
 
         if not boxes:
             self.cached_gate_workers = []
@@ -527,11 +561,9 @@ class MultiCameraOrchestrator:
 
             if matched_face:
                 fx, fy, fw, fh = matched_face
-                # Ensure appropriate headroom for safety helmets (helmet dome sits 0.70 to 0.85 * fh above brow fy)
-                helmet_top = max(0, fy - int(fh * 0.85))
+                # Ensure appropriate headroom for safety helmets (dome sits 0.80 to 1.20 * fh above brow fy)
+                helmet_top = max(0, fy - int(fh * 1.25))
                 y1 = min(y1, helmet_top)
-                # Prevent drifting excessively far above head into ceiling/wall:
-                y1 = max(y1, max(0, fy - int(fh * 1.10)))
                 # Horizontal bounds around worker
                 x1 = max(0, min(x1, fx - int(fw * 0.75)))
                 x2 = min(gw, max(x2, fx + fw + int(fw * 0.75)))
@@ -540,6 +572,12 @@ class MultiCameraOrchestrator:
             else:
                 head_h = max(20, int((y2 - y1) * 0.35))
                 face_crop = gate_frame[y1:y1 + head_h, x1:x2]
+
+            # Strictly clip bounding box coordinates within frame limits
+            x1 = max(0, min(gw - 1, x1))
+            y1 = max(0, min(gh - 1, y1))
+            x2 = max(x1 + 10, min(gw, x2))
+            y2 = max(y1 + 20, min(gh, y2))
 
             name, score = self.face_engine.identify_face(
                 face_crop, matched_face_raw=matched_face_raw, full_frame=gate_frame
@@ -596,7 +634,7 @@ class MultiCameraOrchestrator:
             }
             gate_drawings.append(drawing_data)
 
-            # Append to telemetry
+            # Append to telemetry with clamped percentages and explicit helmet_bbox
             gate_workers.append({
                 "worker_track_id": worker_id,
                 "camera_id": "CCTV_01",
@@ -616,6 +654,14 @@ class MultiCameraOrchestrator:
                     "label": lbl,
                     "color": "#10b981" if is_compliant else "#f59e0b",
                 },
+                "helmet_bbox": {
+                    "x": float(round((max(0, min(gw - 1, cx1)) / gw) * 100, 1)),
+                    "y": float(round((max(0, min(gh - 1, cy1)) / gh) * 100, 1)),
+                    "width": float(round((max(1, min(gw - cx1, cx2 - cx1)) / gw) * 100, 1)),
+                    "height": float(round((max(1, min(gh - cy1, cy2 - cy1)) / gh) * 100, 1)),
+                    "label": "Helmet Detected" if helmet == "PASS" else "Helmet Not Detected",
+                    "color": "#10b981" if helmet == "PASS" else "#ef4444",
+                } if (cx2 > cx1 and cy2 > cy1) else None,
             })
 
             if is_verified:
@@ -651,6 +697,10 @@ class MultiCameraOrchestrator:
     def process_ward_stream(self, ward_frame: np.ndarray) -> list:
         """Processes elevated work area camera for sustained PPE tracking and cross-angle identity resolution."""
         if ward_frame is None or ward_frame.size == 0:
+            return []
+
+        # When CCTV 2 is offline or in synthetic standby, skip neural inference to eliminate CPU load
+        if self.ward_stream.is_synthetic_mode:
             return []
 
         # Run dedicated neural YOLO PPE detection once for the ward frame
@@ -803,6 +853,12 @@ class MultiCameraOrchestrator:
                 cv2.rectangle(ward_frame, (cx1, ty1 - th - 4), (cx1 + tw + 6, ty1), (15, 20, 28), -1)
                 cv2.putText(ward_frame, h_txt, (cx1 + 3, ty1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_col, 1)
 
+            # Strictly clip bounding box coordinates within frame limits
+            x1 = max(0, min(ww - 1, x1))
+            y1 = max(0, min(wh - 1, y1))
+            x2 = max(x1 + 10, min(ww, x2))
+            y2 = max(y1 + 20, min(wh, y2))
+
             ward_workers.append({
                 "worker_track_id": str_tid,
                 "camera_id": "CCTV_02",
@@ -822,6 +878,14 @@ class MultiCameraOrchestrator:
                     "label": f"Worker [{str_tid}]",
                     "color": "#10b981" if is_compliant else ("#ef4444" if is_confirmed_viol else "#f59e0b"),
                 },
+                "helmet_bbox": {
+                    "x": float(round((max(0, min(ww - 1, cx1)) / ww) * 100, 1)),
+                    "y": float(round((max(0, min(wh - 1, cy1)) / wh) * 100, 1)),
+                    "width": float(round((max(1, min(ww - cx1, cx2 - cx1)) / ww) * 100, 1)),
+                    "height": float(round((max(1, min(wh - cy1, cy2 - cy1)) / wh) * 100, 1)),
+                    "label": "Helmet Detected" if helmet == "PASS" else "Helmet Not Detected",
+                    "color": "#10b981" if helmet == "PASS" else "#ef4444",
+                } if (cx2 > cx1 and cy2 > cy1) else None,
             })
 
             # Trigger Cross-Angle Identity Resolution when violation persists >= 15 frames
@@ -908,18 +972,24 @@ class MultiCameraOrchestrator:
 
                 # 1. Fetch latest frames from decoupled stream threads
                 gate_frame, _ = self.gate_stream.get_latest_frame()
-                ward_frame, _ = self.ward_stream.get_latest_frame()
-
                 if gate_frame is None:
-                    gate_frame = generate_synthetic_industrial_frame(1280, 720, frame_idx, "CCTV_01_GATE")
-                if ward_frame is None:
-                    ward_frame = generate_synthetic_industrial_frame(1280, 720, frame_idx, "CCTV_02_WARD")
+                    gate_frame = get_standby_numpy_frame("cctv1")
 
                 # 2. Process Gate stream (Entry access verification & PPE)
                 gate_workers = self.process_gate_stream(gate_frame) or []
 
-                # 3. Process Ward stream (PPE tracking & event-driven alert)
-                ward_workers = self.process_ward_stream(ward_frame) or []
+                # 3. Process Ward stream (PPE tracking & event-driven alert only when live stream is connected)
+                if not self.ward_stream.is_synthetic_mode:
+                    ward_frame, _ = self.ward_stream.get_latest_frame()
+                    if ward_frame is not None:
+                        ward_workers = self.process_ward_stream(ward_frame) or []
+                        ward_resized = cv2.resize(ward_frame, (w_sub, h_sub))
+                    else:
+                        ward_workers = []
+                        ward_resized = get_standby_numpy_frame("cctv2")
+                else:
+                    ward_workers = []
+                    ward_resized = get_standby_numpy_frame("cctv2")
 
                 # Broadcast live worker tracking telemetry for dashboard
                 if not self.test_mode:
@@ -928,7 +998,6 @@ class MultiCameraOrchestrator:
                 # 4. Render Dual-Stream Composite Tactical Display
                 h_sub, w_sub = 360, 640
                 gate_resized = cv2.resize(gate_frame, (w_sub, h_sub))
-                ward_resized = cv2.resize(ward_frame, (w_sub, h_sub))
 
                 # Header bars on crops
                 cv2.rectangle(gate_resized, (0, 0), (w_sub, 30), (20, 25, 35), -1)
@@ -1018,19 +1087,23 @@ class MultiCameraOrchestrator:
                 # 5. Broadcast to Web Dashboard (Sub-50ms MJPEG HTTP Stream)
                 if not self.test_mode:
                     self.web_broadcaster.update_frame("cctv1", gate_resized)
-                    self.web_broadcaster.update_frame("cctv2", ward_resized)
+                    if not self.ward_stream.is_synthetic_mode:
+                        self.web_broadcaster.update_frame("cctv2", ward_resized)
+                    else:
+                        self.web_broadcaster.clear_frame("cctv2")
+
                     self.web_broadcaster.update_frame("composite", display_view)
                     if self.cctv3_stream and not self.cctv3_stream.is_synthetic_mode:
                         f3, _ = self.cctv3_stream.get_latest_frame()
                         if f3 is not None:
-                            self.web_broadcaster.update_frame("cctv3", f3)
+                            self.web_broadcaster.update_frame("cctv3", cv2.resize(f3, (w_sub, h_sub)))
                     else:
                         self.web_broadcaster.clear_frame("cctv3")
 
                     if self.cctv4_stream and not self.cctv4_stream.is_synthetic_mode:
                         f4, _ = self.cctv4_stream.get_latest_frame()
                         if f4 is not None:
-                            self.web_broadcaster.update_frame("cctv4", f4)
+                            self.web_broadcaster.update_frame("cctv4", cv2.resize(f4, (w_sub, h_sub)))
                     else:
                         self.web_broadcaster.clear_frame("cctv4")
 

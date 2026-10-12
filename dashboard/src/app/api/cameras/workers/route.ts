@@ -7,7 +7,7 @@ export async function GET() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1200);
 
-    const res = await fetch("http://localhost:5000/api/workers", {
+    const res = await fetch("http://127.0.0.1:5000/api/workers", {
       signal: controller.signal,
       cache: "no-store",
     });
