@@ -1,6 +1,8 @@
 import sys
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +50,12 @@ class FirestoreSyncClient:
         self.use_admin_sdk = False
         self.admin_db = None
 
+        # Bounded background executor (max 2 workers, capped at 5 pending tasks)
+        # Guarantees slow cloud network I/O never blocks the real-time camera inference loop
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="FirestoreWorker")
+        self._pending_tasks = 0
+        self._task_lock = threading.Lock()
+
         # Check if serviceAccountKey.json is available
         if SERVICE_ACCOUNT_PATH.exists():
             try:
@@ -66,6 +74,30 @@ class FirestoreSyncClient:
         if not self.use_admin_sdk:
             logger.info(f"[Firestore] Initialized using Cloud Firestore REST API for project: '{self.project_id}'.")
 
+    def _dispatch_async(self, func, *args, **kwargs) -> bool:
+        """Dispatches a network I/O task to the bounded background worker pool."""
+        with self._task_lock:
+            if self._pending_tasks >= 5:
+                logger.warning("[Firestore] Bounded task queue full (>=5 pending); skipping push to prevent memory accumulation.")
+                return False
+            self._pending_tasks += 1
+
+        def _worker_wrapper():
+            try:
+                func(*args, **kwargs)
+            finally:
+                with self._task_lock:
+                    self._pending_tasks -= 1
+
+        try:
+            self._executor.submit(_worker_wrapper)
+            return True
+        except Exception as e:
+            with self._task_lock:
+                self._pending_tasks -= 1
+            logger.error(f"[Firestore] Failed to dispatch background task: {e}")
+            return False
+
     def _rest_patch(self, doc_path: str, data: dict, use_update_mask: bool = True):
         """Writes or updates a document via Firestore REST API with updateMask support."""
         url = (
@@ -83,7 +115,7 @@ class FirestoreSyncClient:
         body = {"fields": fields}
 
         try:
-            resp = requests.patch(url, params=params_list, json=body, timeout=5)
+            resp = requests.patch(url, params=params_list, json=body, timeout=3.5)
             if resp.status_code in (200, 201):
                 return True
             else:
@@ -95,8 +127,8 @@ class FirestoreSyncClient:
             logger.error(f"[Firestore REST Connection Error]: {e}")
             return False
 
-    def push_incident(self, incident: dict) -> bool:
-        """Pushes an incident to facilities/{facility_id}/incidents/{incident_id}."""
+    def _push_incident_sync(self, incident: dict) -> bool:
+        """Synchronous implementation of pushing an incident."""
         incident_id = incident.get("incident_id")
         if not incident_id:
             logger.error("Incident missing incident_id.")
@@ -123,8 +155,14 @@ class FirestoreSyncClient:
                 logger.info(f"[Firestore REST] Incident {incident_id} [{incident.get('priority')}] published to Cloud.")
             return success
 
-    def update_zone_priority(self, zone_id: str, priority: str, fire_detected: bool = False, smoke_detected: bool = False):
-        """Updates zone status & priority in Firestore."""
+    def push_incident(self, incident: dict, sync: bool = False) -> bool:
+        """Pushes an incident to facilities/{facility_id}/incidents/{incident_id}."""
+        if sync:
+            return self._push_incident_sync(incident)
+        return self._dispatch_async(self._push_incident_sync, incident)
+
+    def _update_zone_priority_sync(self, zone_id: str, priority: str, fire_detected: bool = False, smoke_detected: bool = False) -> bool:
+        """Synchronous implementation of updating zone status & priority."""
         data = {
             "current_priority": priority,
             "fire_detected": fire_detected,
@@ -147,8 +185,14 @@ class FirestoreSyncClient:
             path = f"facilities/{self.facility_id}/zones/{zone_id}"
             return self._rest_patch(path, data)
 
-    def push_gate_log(self, gate_log: dict) -> bool:
-        """Pushes a gate check-in entry to facilities/{facility_id}/gate_logs/{log_id}."""
+    def update_zone_priority(self, zone_id: str, priority: str, fire_detected: bool = False, smoke_detected: bool = False, sync: bool = False) -> bool:
+        """Updates zone status & priority in Firestore."""
+        if sync:
+            return self._update_zone_priority_sync(zone_id, priority, fire_detected, smoke_detected)
+        return self._dispatch_async(self._update_zone_priority_sync, zone_id, priority, fire_detected, smoke_detected)
+
+    def _push_gate_log_sync(self, gate_log: dict) -> bool:
+        """Synchronous implementation of pushing gate check-in entry."""
         log_id = gate_log.get("log_id")
         if not log_id:
             import time
@@ -175,3 +219,16 @@ class FirestoreSyncClient:
             if success:
                 logger.info(f"[Firestore REST] Gate Log {log_id} for {gate_log.get('worker_name')} published to Cloud.")
             return success
+
+    def push_gate_log(self, gate_log: dict, sync: bool = False) -> bool:
+        """Pushes a gate check-in entry to facilities/{facility_id}/gate_logs/{log_id}."""
+        if sync:
+            return self._push_gate_log_sync(gate_log)
+        return self._dispatch_async(self._push_gate_log_sync, gate_log)
+
+    def close(self):
+        """Cleanly shuts down background worker pool."""
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass

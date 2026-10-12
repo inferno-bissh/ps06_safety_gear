@@ -397,6 +397,11 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         try:
+            self.request.settimeout(2.5)
+        except Exception:
+            pass
+
+        try:
             while True:
                 with _FRAME_LOCK:
                     if channel == "composite":
@@ -414,6 +419,7 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
                     + frame_bytes + b"\r\n"
                 )
                 self.wfile.write(chunk)
+                self.wfile.flush()
                 
                 # Stream at ~25-30 FPS
                 time.sleep(0.035)
@@ -584,7 +590,7 @@ class WebStreamBroadcaster:
         self.port = port
         self.server: Optional[ThreadingHTTPServer] = None
         self.thread: Optional[threading.Thread] = None
-        self.jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+        self.jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), 65]
 
     def start(self):
         """Starts HTTP streaming server on background daemon thread."""

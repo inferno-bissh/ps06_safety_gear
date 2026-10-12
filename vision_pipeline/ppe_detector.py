@@ -42,7 +42,7 @@ class WorkerPPEEvaluator:
             except Exception as e:
                 print(f"[PPE Neural Model] Warning: Could not load PPE model ({e}), using HSV fallback.")
 
-    def detect_frame_ppe(self, frame: np.ndarray, conf: float = PPE_CONF_THRESHOLD) -> List[dict]:
+    def detect_frame_ppe(self, frame: np.ndarray, conf: float = PPE_CONF_THRESHOLD, imgsz: int = 384) -> List[dict]:
         """
         Runs dedicated neural YOLO PPE detection on a single frame.
         Returns list of detected PPE items with bounding boxes, labels, and confidence scores.
@@ -51,7 +51,7 @@ class WorkerPPEEvaluator:
             return []
 
         try:
-            results = self.ppe_model(frame, conf=conf, verbose=False)
+            results = self.ppe_model(frame, conf=conf, verbose=False, imgsz=imgsz)
             if not results or len(results[0].boxes) == 0:
                 return []
 

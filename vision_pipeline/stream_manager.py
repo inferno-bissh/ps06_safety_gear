@@ -1,4 +1,6 @@
 import os
+# Set FFmpeg network timeout and low-latency flags BEFORE importing cv2
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rw_timeout;2000000|fflags;nobuffer|flags;low_delay|max_delay;500000"
 import cv2
 import threading
 import time
@@ -6,9 +8,6 @@ import socket
 from urllib.parse import urlparse
 import numpy as np
 from typing import Tuple, Optional, Union
-
-# Set FFmpeg network timeout and low-latency flags to prevent buffer accumulation on IP cameras
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rw_timeout;2000000|fflags;nobuffer|flags;low_delay"
 
 def is_host_reachable(url: str, timeout: float = 0.4) -> bool:
     """Pre-checks network reachability of IP camera endpoint to prevent FFmpeg crashes."""
@@ -103,8 +102,8 @@ class ThreadedCameraStream:
                 self.is_synthetic_mode = True
             else:
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
                 print(f"[Stream Initialized] Connected to {camera_id} via '{self.src}'.")
 
         # Start background capture daemon
@@ -155,6 +154,9 @@ class ThreadedCameraStream:
                             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                             self.is_synthetic_mode = False
                             print(f"[Stream Restored] Successfully connected camera feed for {self.camera_id} via '{self.src}'.")
+                            if frame_test.shape[1] > 480:
+                                new_h = max(240, int(frame_test.shape[0] * (480.0 / frame_test.shape[1])))
+                                frame_test = cv2.resize(frame_test, (480, new_h), interpolation=cv2.INTER_AREA)
                             with self.lock:
                                 self.latest_frame = frame_test
                                 self.latest_timestamp = now
@@ -165,7 +167,7 @@ class ThreadedCameraStream:
 
                 # Serve lightweight standby frame without burning CPU on animated gradient rendering
                 if step % 15 == 0 or self.latest_frame is None:
-                    synth = generate_synthetic_industrial_frame(640, 360, 0, self.camera_id)
+                    synth = generate_synthetic_industrial_frame(480, 270, 0, self.camera_id)
                     with self.lock:
                         self.latest_frame = synth
                         self.latest_timestamp = now
@@ -175,11 +177,24 @@ class ThreadedCameraStream:
 
             # In physical capture mode: read frame
             try:
-                ret, frame = self.cap.read()
+                # For network IP cameras: drain any backlog packets in FFmpeg queue so we always decode the freshest frame
+                if not isinstance(self.src, int):
+                    for _ in range(5):
+                        t_grab = time.perf_counter()
+                        if not self.cap.grab():
+                            break
+                        if (time.perf_counter() - t_grab) > 0.002:
+                            # Waited for genuine network packet arrival; buffer is drained
+                            break
+                    ret, frame = self.cap.retrieve()
+                else:
+                    ret, frame = self.cap.read()
+
                 if ret and frame is not None:
-                    # If frame exceeds 1280 wide (e.g. 1080p mobile camera), downscale immediately to slash GIL/memory load
-                    if frame.shape[1] > 1280:
-                        frame = cv2.resize(frame, (1280, 720))
+                    # Fast linear resize downscale to 480px width (saves 20ms over INTER_AREA)
+                    if frame.shape[1] > 480:
+                        new_h = max(240, int(frame.shape[0] * (480.0 / frame.shape[1])))
+                        frame = cv2.resize(frame, (480, new_h), interpolation=cv2.INTER_LINEAR)
                     with self.lock:
                         self.latest_frame = frame
                         self.latest_timestamp = now
@@ -196,6 +211,11 @@ class ThreadedCameraStream:
             except Exception as e:
                 self.is_synthetic_mode = True
                 last_reconnect_attempt = now
+
+            # Cooperative thread yielding without artificial sleep that accumulates buffer lag:
+            # Physical camera reading (USB or IP stream) is clocked by incoming frames.
+            # Avoid sleeping longer than 1ms so OpenCV/FFmpeg packet buffer stays completely drained.
+            time.sleep(0.001)
 
     def get_latest_frame(self, copy: bool = False) -> Tuple[Optional[np.ndarray], float]:
         """Returns the most recent frame and capture timestamp without blocking."""

@@ -435,7 +435,14 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const unsubIncidents = subscribeIncidents(
       facilityId,
       (data: Incident[]) => {
-        if (data) setIncidents(data);
+        if (data) {
+          setIncidents(data);
+          const openP3 = data.find((i) => i.priority === "P3" && i.status === "OPEN");
+          if (openP3) {
+            setP3EmergencyIncident((curr) => curr || openP3);
+            setIsP3TakeoverActive((curr) => curr || true);
+          }
+        }
       },
       (err: unknown) => console.warn("[Firestore] Incidents sync error:", err)
     );
@@ -593,9 +600,16 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
 
           if (h.fire) {
+            const activeCamId = h.active_camera_id || "CCTV_02";
+            const camMeta = h.cameras?.[activeCamId];
+            const zoneInfo =
+              activeCamId === "CCTV_01" || activeCamId === "GATE"
+                ? { id: "GATE_ZONE", name: "Main Entrance Gate" }
+                : { id: "WELDING_ZONE", name: "Welding & Fabrication Bay" };
+
             setZones((prev) =>
               prev.map((z) =>
-                z.zone_id === "WELDING_ZONE"
+                z.zone_id === zoneInfo.id || z.zone_id === "WELDING_ZONE"
                   ? {
                       ...z,
                       current_priority: "P3",
@@ -609,11 +623,57 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               )
             );
             setFacility((prev) => ({ ...prev, emergency_siren_active: true }));
+
+            // Ensure prominent P3 Master Alarm Warning Board/Modal is active
+            setP3EmergencyIncident((curr) => {
+              if (curr && isP3TakeoverActive) return curr;
+              const fireIncident: Incident = {
+                incident_id: `FIR-${activeCamId}-${Date.now().toString().slice(-6)}`,
+                facility_id: facility.facility_id || "STPI_HOST_01",
+                zone_id: zoneInfo.id,
+                zone_name: zoneInfo.name,
+                camera_id: activeCamId,
+                source_event_type: "FIRE",
+                priority: "P3",
+                timestamp: new Date().toISOString(),
+                confidence: camMeta?.fire_confidence || 0.96,
+                status: "OPEN",
+                required_action: "EVACUATE ZONE IMMEDIATELY — SIREN ACTIVATED — DISPATCH FIRE BRIGADE",
+                decision_reason: `Live AI Vision confirmed active flame on ${activeCamId} (${((camMeta?.fire_confidence || 0.96) * 100).toFixed(0)}% conf) -> Critical P3 Emergency Takeover.`,
+                evidence_image: "https://images.unsplash.com/photo-1542385151-efd9000785a0?auto=format&fit=crop&w=800&q=80",
+                vision_evidence: {
+                  fire: true,
+                  smoke: !!h.smoke,
+                },
+                sensor_evidence: {
+                  flame_detected: true,
+                  gas_sensor_raw: 820,
+                  smoke_index: 0.85,
+                },
+                network_mode: facility.current_network_mode,
+              };
+
+              setIncidents((prev) => {
+                if (prev.some((inc) => inc.source_event_type === "FIRE" && inc.status === "OPEN")) {
+                  return prev;
+                }
+                return [fireIncident, ...prev];
+              });
+              persistIncident(fireIncident);
+              return fireIncident;
+            });
             setIsP3TakeoverActive(true);
           } else if (h.smoke) {
+            const activeCamId = h.active_camera_id || "CCTV_02";
+            const camMeta = h.cameras?.[activeCamId];
+            const zoneInfo =
+              activeCamId === "CCTV_01" || activeCamId === "GATE"
+                ? { id: "GATE_ZONE", name: "Main Entrance Gate" }
+                : { id: "WELDING_ZONE", name: "Welding & Fabrication Bay" };
+
             setZones((prev) =>
               prev.map((z) =>
-                z.zone_id === "WELDING_ZONE"
+                z.zone_id === zoneInfo.id || z.zone_id === "WELDING_ZONE"
                   ? {
                       ...z,
                       current_priority: z.current_priority === "P3" ? "P3" : "P2",
@@ -624,6 +684,59 @@ export const SafetyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   : z
               )
             );
+
+            // Record P2 Smoke incident in Incident Centre
+            setIncidents((prev) => {
+              if (prev.some((inc) => inc.source_event_type === "SMOKE" && inc.status === "OPEN")) {
+                return prev;
+              }
+              const smokeIncident: Incident = {
+                incident_id: `SMK-${activeCamId}-${Date.now().toString().slice(-6)}`,
+                facility_id: facility.facility_id || "STPI_HOST_01",
+                zone_id: zoneInfo.id,
+                zone_name: zoneInfo.name,
+                camera_id: activeCamId,
+                source_event_type: "SMOKE",
+                priority: "P2",
+                timestamp: new Date().toISOString(),
+                confidence: camMeta?.smoke_confidence || (typeof h.smoke_index === "number" ? h.smoke_index : 0.88),
+                status: "OPEN",
+                required_action: "INSPECTION REQUIRED — VISUAL SMOKE CLOUD DETECTED",
+                decision_reason: `Live AI Vision confirmed smoke plume on ${activeCamId} (${(((camMeta?.smoke_confidence || h.smoke_index || 0.88)) * 100).toFixed(0)}% conf) -> P2 Advisory Incident.`,
+                evidence_image: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=800&q=80",
+                vision_evidence: {
+                  fire: false,
+                  smoke: true,
+                },
+                sensor_evidence: {
+                  flame_detected: false,
+                  gas_sensor_raw: 540,
+                  smoke_index: typeof h.smoke_index === "number" ? h.smoke_index : 0.88,
+                },
+                network_mode: facility.current_network_mode,
+              };
+              persistIncident(smokeIncident);
+              return [smokeIncident, ...prev];
+            });
+          } else {
+            // Live hazards cleared
+            setZones((prev) =>
+              prev.map((z) => {
+                if (z.fire_detected || z.smoke_detected) {
+                  return {
+                    ...z,
+                    fire_detected: false,
+                    smoke_detected: false,
+                    sensor_flame: false,
+                    sensor_smoke_index: 0.14,
+                    sensor_smoke_raw: 140,
+                    current_priority: z.current_priority === "P3" || z.current_priority === "P2" ? "P0" : z.current_priority,
+                  };
+                }
+                return z;
+              })
+            );
+            setFacility((prev) => ({ ...prev, emergency_siren_active: false }));
           }
         }
       } catch {

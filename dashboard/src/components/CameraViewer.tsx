@@ -81,12 +81,31 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
   // References and dynamic geometry for precise bounding-box overlay alignment
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const lastGeometryRef = useRef<{ cw: number; ch: number; nw: number; nh: number } | null>(null);
+  const hasInitialFrameLoadedRef = useRef(false);
   const [videoRect, setVideoRect] = useState<{ left: number; top: number; width: number; height: number }>({
     left: 0,
     top: 0,
     width: 100,
     height: 100,
   });
+
+  // Explicit unmount cleanup: abort MJPEG HTTP stream and free browser socket immediately
+  // Prevents hitting Chrome's 6 concurrent connections per host limit on tab switches
+  useEffect(() => {
+    return () => {
+      if (imgRef.current) {
+        imgRef.current.onload = null;
+        imgRef.current.onerror = null;
+        imgRef.current.src = "";
+      }
+    };
+  }, []);
+
+  // Reset initial load flag when stream key / reconnect happens
+  useEffect(() => {
+    hasInitialFrameLoadedRef.current = false;
+  }, [streamKey]);
 
   const updateVideoRect = useCallback(() => {
     const img = imgRef.current;
@@ -99,6 +118,13 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     const nh = img.naturalHeight || ch;
 
     if (cw <= 0 || ch <= 0 || nw <= 0 || nh <= 0) return;
+
+    // Fast bail-out: if dimensions have not changed, skip calculations and state updates
+    const last = lastGeometryRef.current;
+    if (last && last.cw === cw && last.ch === ch && last.nw === nw && last.nh === nh) {
+      return;
+    }
+    lastGeometryRef.current = { cw, ch, nw, nh };
 
     const containerAspect = cw / ch;
     const videoAspect = nw / nh;
@@ -118,18 +144,51 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
       rx = (cw - rw) / 2;
     }
 
-    setVideoRect({
-      left: Math.max(0, (rx / cw) * 100),
-      top: Math.max(0, (ry / ch) * 100),
-      width: Math.min(100, (rw / cw) * 100),
-      height: Math.min(100, (rh / ch) * 100),
+    const nextLeft = Math.max(0, (rx / cw) * 100);
+    const nextTop = Math.max(0, (ry / ch) * 100);
+    const nextWidth = Math.min(100, (rw / cw) * 100);
+    const nextHeight = Math.min(100, (rh / ch) * 100);
+
+    setVideoRect((prev) => {
+      if (
+        Math.abs(prev.left - nextLeft) < 0.05 &&
+        Math.abs(prev.top - nextTop) < 0.05 &&
+        Math.abs(prev.width - nextWidth) < 0.05 &&
+        Math.abs(prev.height - nextHeight) < 0.05
+      ) {
+        return prev;
+      }
+      return {
+        left: nextLeft,
+        top: nextTop,
+        width: nextWidth,
+        height: nextHeight,
+      };
     });
   }, []);
 
   useEffect(() => {
     updateVideoRect();
     window.addEventListener("resize", updateVideoRect);
-    return () => window.removeEventListener("resize", updateVideoRect);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && containerRef.current) {
+      ro = new ResizeObserver(() => {
+        updateVideoRect();
+      });
+      ro.observe(containerRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", updateVideoRect);
+      if (ro) ro.disconnect();
+    };
+  }, [updateVideoRect]);
+
+  const handleImageLoad = useCallback(() => {
+    setStreamError((prev) => (prev ? false : prev));
+    if (!hasInitialFrameLoadedRef.current) {
+      hasInitialFrameLoadedRef.current = true;
+      updateVideoRect();
+    }
   }, [updateVideoRect]);
 
   const isCctv1 = useMemo(() => {
@@ -147,7 +206,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
     // Auto-recovery: attempt switching back to real-time MJPEG feed after brief network hiccups
     const recoveryTimeout = setTimeout(() => {
       setUseSnapshotMode(false);
-    }, 3500);
+    }, 8000);
 
     return () => {
       clearInterval(interval);
@@ -632,10 +691,7 @@ export const CameraViewer: React.FC<CameraViewerProps> = ({
               src={showFallbackSim ? resolvedStreamUrl : useSnapshotMode ? snapshotUrl : resolvedStreamUrl}
               alt={camera.name}
               className="w-full h-full object-contain block max-w-full max-h-full select-none"
-              onLoad={() => {
-                setStreamError(false);
-                updateVideoRect();
-              }}
+              onLoad={handleImageLoad}
               onError={() => {
                 if (!showFallbackSim) {
                   if (!useSnapshotMode) {
